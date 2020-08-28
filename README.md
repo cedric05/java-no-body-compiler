@@ -12,8 +12,7 @@ java -jar javac-no-body.jar file.java
 ```
 
 ## example 
-compile jdk source and generated [rt+javax+sun...jar](https://github.com/cedric05/java-no-body-compiler/releases/download/4.17-snapshot/rt-stub.jar.zip) 4.81MB
-Original jar rt.jar 60+ MB 
+compile jdk source and generated [rt+javax+sun...jar](https://github.com/cedric05/java-no-body-compiler/releases/download/4.17-snapshot/rt-stub.jar.zip) size: 4.81MB. Original rt.jar size: 60+ MB 
 
 
 ## Source

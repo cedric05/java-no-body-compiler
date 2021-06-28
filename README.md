@@ -1,3 +1,6 @@
+Latest update includes eclipse 4.20 release ecj.
+https://download.eclipse.org/eclipse/downloads/drops4/R-4.20-202106111600/download.php?dropFile=ecjsrc-4.20.jar
+
 Java compiler compiles java source files to `.class` files without any body. 
 
 # Goal 
@@ -21,3 +24,14 @@ Source of this compiler is copied with only one line change to facilitate this p
 
 beware and bewarned, will not be helpful in realsenario. 
 Purely for research and educational purpose. 
+
+
+
+```diff
+---- a/org/eclipse/jdt/internal/compiler/ast/CompilationUnitDeclaration.java
+++++ b/org/eclipse/jdt/internal/compiler/ast/CompilationUnitDeclaration.java
+<       public boolean ignoreMethodBodies = false;
+---
+>       public boolean ignoreMethodBodies = true;
+
+```

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2021 IBM Corporation and others.
+ * Copyright (c) 2000, 2024 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -33,6 +33,7 @@
 package org.eclipse.jdt.internal.compiler.lookup;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
@@ -47,12 +48,15 @@ import org.eclipse.jdt.internal.compiler.ast.AbstractVariableDeclaration;
 import org.eclipse.jdt.internal.compiler.ast.FieldDeclaration;
 import org.eclipse.jdt.internal.compiler.ast.QualifiedAllocationExpression;
 import org.eclipse.jdt.internal.compiler.ast.RecordComponent;
+import org.eclipse.jdt.internal.compiler.ast.SingleTypeReference;
 import org.eclipse.jdt.internal.compiler.ast.TypeDeclaration;
 import org.eclipse.jdt.internal.compiler.ast.TypeParameter;
 import org.eclipse.jdt.internal.compiler.ast.TypeReference;
 import org.eclipse.jdt.internal.compiler.classfmt.ClassFileConstants;
 import org.eclipse.jdt.internal.compiler.env.AccessRestriction;
 import org.eclipse.jdt.internal.compiler.env.ICompilationUnit;
+import org.eclipse.jdt.internal.compiler.impl.CompilerOptions;
+import org.eclipse.jdt.internal.compiler.impl.JavaFeature;
 import org.eclipse.jdt.internal.compiler.problem.AbortCompilation;
 import org.eclipse.jdt.internal.compiler.problem.ProblemReporter;
 import org.eclipse.jdt.internal.compiler.util.HashtableOfObject;
@@ -62,7 +66,8 @@ public class ClassScope extends Scope {
 
 	public TypeDeclaration referenceContext;
 	public TypeReference superTypeReference;
-	java.util.ArrayList<Object> deferredBoundChecks; // contains TypeReference or Runnable. TODO consider making this a List<Runnable>
+	java.util.ArrayList<TypeReference> deferredBoundChecks;
+	public boolean resolvingPolyExpressionArguments = false;
 
 	public ClassScope(Scope parent, TypeDeclaration context) {
 		super(Scope.CLASS_SCOPE, parent);
@@ -136,6 +141,7 @@ public class ClassScope extends Scope {
 				}
 			}
 		}
+		anonymousType.tagBits |= TagBits.EndHierarchyCheck;
 		connectMemberTypes();
 		buildFieldsAndMethods();
 		anonymousType.faultInTypesForFieldsAndMethods();
@@ -143,8 +149,7 @@ public class ClassScope extends Scope {
 	}
 
 	private void checkForEnumSealedPreview(ReferenceBinding supertype, LocalTypeBinding anonymousType) {
-		if (compilerOptions().sourceLevel < ClassFileConstants.JDK15
-				|| !compilerOptions().enablePreviewFeatures
+		if (!JavaFeature.SEALED_CLASSES.isSupported(compilerOptions())
 				|| !supertype.isEnum()
 				|| !(supertype instanceof SourceTypeBinding))
 			return;
@@ -370,6 +375,7 @@ public class ClassScope extends Scope {
 			checkParameterizedTypeBounds();
 			checkParameterizedSuperTypeCollisions();
 		}
+		this.referenceContext.updateSupertypesWithAnnotations(Collections.emptyMap());
 		buildFieldsAndMethods();
 		localType.faultInTypesForFieldsAndMethods();
 
@@ -481,7 +487,7 @@ public class ClassScope extends Scope {
 						hasAbstractMethods = hasAbstractMethods || methodBinding.isAbstract();
 						hasNativeMethods = hasNativeMethods || methodBinding.isNative();
 						if (methods[i].isCanonicalConstructor()) {
-							methodBinding.tagBits |= TagBits.IsCanonicalConstructor;
+							methodBinding.extendedTagBits |= ExtendedTagBits.IsCanonicalConstructor;
 						}
 					}
 				}
@@ -585,10 +591,10 @@ public class ClassScope extends Scope {
 	private void checkAndSetModifiers() {
 		SourceTypeBinding sourceType = this.referenceContext.binding;
 		int modifiers = sourceType.modifiers;
-		boolean isPreviewEnabled = compilerOptions().sourceLevel == ClassFileConstants.getLatestJDKLevel() &&
-				compilerOptions().enablePreviewFeatures;
+		CompilerOptions options = compilerOptions();
 		boolean is16Plus = compilerOptions().sourceLevel >= ClassFileConstants.JDK16;
-		boolean flagSealedNonModifiers = isPreviewEnabled &&
+		boolean isSealedSupported = JavaFeature.SEALED_CLASSES.isSupported(options);
+		boolean flagSealedNonModifiers = isSealedSupported &&
 				(modifiers & (ExtraCompilerModifiers.AccSealed | ExtraCompilerModifiers.AccNonSealed)) != 0;
 		if (sourceType.isRecord()) {
 			/* JLS 14 Records Sec 8.10 - A record declaration is implicitly final. */
@@ -725,7 +731,7 @@ public class ClassScope extends Scope {
 						| ClassFileConstants.AccStrictfp | ClassFileConstants.AccAnnotation
 						| ((is16Plus && this.parent instanceof ClassScope) ? ClassFileConstants.AccStatic : 0));
 				if ((realModifiers & UNEXPECTED_MODIFIERS) != 0
-						|| (isPreviewEnabled && flagSealedNonModifiers))
+						|| flagSealedNonModifiers)
 					problemReporter().localStaticsIllegalVisibilityModifierForInterfaceLocalType(sourceType);
 //				if ((modifiers & ClassFileConstants.AccStatic) != 0) {
 //					problemReporter().recordIllegalStaticModifierForLocalClassOrInterface(sourceType);
@@ -820,7 +826,7 @@ public class ClassScope extends Scope {
 					}
 					modifiers |= ClassFileConstants.AccFinal;
 				}
-				if (isPreviewEnabled && (modifiers & ClassFileConstants.AccFinal) == 0)
+				if (isSealedSupported && (modifiers & ClassFileConstants.AccFinal) == 0)
 					modifiers |= ExtraCompilerModifiers.AccSealed;
 			}
 		} else if (sourceType.isRecord()) {
@@ -1119,13 +1125,8 @@ public class ClassScope extends Scope {
 
 	// Perform deferred bound checks for parameterized type references (only done after hierarchy is connected)
 	public void  checkParameterizedTypeBounds() {
-		for (int i = 0, l = this.deferredBoundChecks == null ? 0 : this.deferredBoundChecks.size(); i < l; i++) {
-			Object toCheck = this.deferredBoundChecks.get(i);
-			if (toCheck instanceof TypeReference)
-				((TypeReference) toCheck).checkBounds(this);
-			else if (toCheck instanceof Runnable)
-				((Runnable) toCheck).run();
-		}
+		for (int i = 0, l = this.deferredBoundChecks == null ? 0 : this.deferredBoundChecks.size(); i < l; i++)
+			this.deferredBoundChecks.get(i).checkBounds(this);
 		this.deferredBoundChecks = null;
 
 		ReferenceBinding[] memberTypes = this.referenceContext.binding.memberTypes;
@@ -1177,7 +1178,11 @@ public class ClassScope extends Scope {
 			if (!superclass.isClass() && (superclass.tagBits & TagBits.HasMissingType) == 0) {
 				problemReporter().superclassMustBeAClass(sourceType, superclassRef, superclass);
 			} else if (superclass.isFinal()) {
-				problemReporter().classExtendFinalClass(sourceType, superclassRef, superclass);
+				if (superclass.isRecord()) {
+					problemReporter().classExtendFinalRecord(sourceType, superclassRef, superclass);
+				} else {
+					problemReporter().classExtendFinalClass(sourceType, superclassRef, superclass);
+				}
 			} else if ((superclass.tagBits & TagBits.HasDirectWildcard) != 0) {
 				problemReporter().superTypeCannotUseWildcard(sourceType, superclassRef, superclass);
 			} else if (superclass.erasure().id == TypeIds.T_JavaLangEnum) {
@@ -1262,7 +1267,7 @@ public class ClassScope extends Scope {
 			// bug xxxx flag Error and return;
 		}
 		if (permSubTypes.size() == 0) {
-			if (!sourceType.isLocalType()) // error flagged already
+			if (!sourceType.isLocalType() && !sourceType.isRecord() && !sourceType.isEnum()) // error flagged already
 				problemReporter().sealedSealedTypeMissingPermits(sourceType, this.referenceContext);
 			return;
 		}
@@ -1274,7 +1279,7 @@ public class ClassScope extends Scope {
 	void connectImplicitPermittedTypes() {
 		TypeDeclaration typeDecl = this.referenceContext;
 		SourceTypeBinding sourceType = typeDecl.binding;
-		if (sourceType.id == TypeIds.T_JavaLangObject || sourceType.isEnum() || sourceType.isRecord()) // already handled
+		if (sourceType.id == TypeIds.T_JavaLangObject) // already handled
 			return;
 		if (sourceType.isSealed() && (typeDecl.permittedTypes == null ||
 				typeDecl.permittedTypes.length == 0)) {
@@ -1308,40 +1313,70 @@ public class ClassScope extends Scope {
 	void connectPermittedTypes() {
 		SourceTypeBinding sourceType = this.referenceContext.binding;
 		sourceType.setPermittedTypes(Binding.NO_PERMITTEDTYPES);
-		if (this.referenceContext.permittedTypes == null) {
-			return;
-		}
 		if (sourceType.id == TypeIds.T_JavaLangObject || sourceType.isEnum()) // already handled
 			return;
 
-		int length = this.referenceContext.permittedTypes.length;
-		ReferenceBinding[] permittedTypeBindings = new ReferenceBinding[length];
-		int count = 0;
-		nextPermittedType : for (int i = 0; i < length; i++) {
-			TypeReference permittedTypeRef = this.referenceContext.permittedTypes[i];
-			ReferenceBinding permittedType = findPermittedtype(permittedTypeRef);
-			if (permittedType == null) { // detected cycle
-				continue nextPermittedType;
-			}
-			// check for simple interface collisions
-			// Check for a duplicate interface once the name is resolved, otherwise we may be confused (i.e. a.b.I and c.d.I)
-			for (int j = 0; j < i; j++) {
-				if (TypeBinding.equalsEquals(permittedTypeBindings[j], permittedType)) {
-					problemReporter().sealedDuplicateTypeInPermits(sourceType, permittedTypeRef, permittedType);
+		if (this.referenceContext.permittedTypes != null) {
+			int length = this.referenceContext.permittedTypes.length;
+			ReferenceBinding[] permittedTypeBindings = new ReferenceBinding[length];
+			int count = 0;
+			nextPermittedType : for (int i = 0; i < length; i++) {
+				TypeReference permittedTypeRef = this.referenceContext.permittedTypes[i];
+				ReferenceBinding permittedType = findPermittedtype(permittedTypeRef);
+				if (permittedType == null) { // detected cycle
 					continue nextPermittedType;
 				}
+				if (!isPermittedTypeInAllowedFormat(sourceType, permittedTypeRef, permittedType))
+					continue nextPermittedType;
+
+				// check for simple interface collisions
+				// Check for a duplicate interface once the name is resolved, otherwise we may be confused (i.e. a.b.I and c.d.I)
+				for (int j = 0; j < i; j++) {
+					if (TypeBinding.equalsEquals(permittedTypeBindings[j], permittedType)) {
+						problemReporter().sealedDuplicateTypeInPermits(sourceType, permittedTypeRef, permittedType);
+						continue nextPermittedType;
+					}
+				}
+				// only want to reach here when no errors are reported
+				permittedTypeBindings[count++] = permittedType;
 			}
-			// only want to reach here when no errors are reported
-			permittedTypeBindings[count++] = permittedType;
+			// hold onto all correctly resolved superinterfaces
+			if (count > 0) {
+				if (count != length)
+					System.arraycopy(permittedTypeBindings, 0, permittedTypeBindings = new ReferenceBinding[count], 0, count);
+				sourceType.setPermittedTypes(permittedTypeBindings);
+			} else {
+				sourceType.setPermittedTypes(Binding.NO_PERMITTEDTYPES);
+			}
 		}
-		// hold onto all correctly resolved superinterfaces
-		if (count > 0) {
-			if (count != length)
-				System.arraycopy(permittedTypeBindings, 0, permittedTypeBindings = new ReferenceBinding[count], 0, count);
-			sourceType.setPermittedTypes(permittedTypeBindings);
-		} else {
-			sourceType.setPermittedTypes(Binding.NO_PERMITTEDTYPES);
+		ReferenceBinding[] memberTypes = sourceType.memberTypes;
+		if (memberTypes != null && memberTypes != Binding.NO_MEMBER_TYPES) {
+			for (int j = 0, size = memberTypes.length; j < size; j++)
+				 ((SourceTypeBinding) memberTypes[j]).scope.connectPermittedTypes();
 		}
+	}
+
+	private boolean isPermittedTypeInAllowedFormat(SourceTypeBinding sourceType, TypeReference permittedTypeRef,
+			ReferenceBinding permittedType) {
+		if (!(permittedType.isMemberType() && permittedTypeRef instanceof SingleTypeReference))
+			return true;
+		ReferenceBinding enclosingType = permittedType.enclosingType();
+		while (enclosingType != null) {
+			if (TypeBinding.equalsEquals(sourceType, enclosingType)) {
+				CompilationUnitScope cu = this.compilationUnitScope();
+				if (cu.imports != null || cu.imports.length > 0) {
+					for (ImportBinding ib : cu.imports) {
+						Binding resolvedImport = cu.resolveSingleImport(ib, Binding.TYPE);
+						if (resolvedImport instanceof TypeBinding &&
+						  TypeBinding.equalsEquals(permittedType, (TypeBinding) resolvedImport))
+							return true;
+					}
+				}
+				return false;
+			}
+			enclosingType = enclosingType.enclosingType();
+		}
+		return true;
 	}
 
 	private boolean connectRecordSuperclass() {
@@ -1425,7 +1460,7 @@ public class ClassScope extends Scope {
 			sourceType.typeBits |= (superInterface.typeBits & TypeIds.InheritableBits);
 			// further analysis against white lists for the unlikely case we are compiling java.util.stream.Stream:
 			if ((sourceType.typeBits & (TypeIds.BitAutoCloseable|TypeIds.BitCloseable)) != 0)
-				sourceType.typeBits |= sourceType.applyCloseableInterfaceWhitelists();
+				sourceType.typeBits |= sourceType.applyCloseableInterfaceWhitelists(compilerOptions());
 			interfaceBindings[count++] = superInterface;
 		}
 		// hold onto all correctly resolved superinterfaces
@@ -1439,27 +1474,20 @@ public class ClassScope extends Scope {
 
 	void connectTypeHierarchy() {
 		SourceTypeBinding sourceType = this.referenceContext.binding;
-		CompilationUnitScope compilationUnitScope = compilationUnitScope();
-		boolean wasAlreadyConnecting = compilationUnitScope.connectingHierarchy;
-		compilationUnitScope.connectingHierarchy = true;
-		try {
-			if ((sourceType.tagBits & TagBits.BeginHierarchyCheck) == 0) {
-				sourceType.tagBits |= TagBits.BeginHierarchyCheck;
-				environment().typesBeingConnected.add(sourceType);
-				boolean noProblems = connectSuperclass();
-				noProblems &= connectSuperInterfaces();
-				environment().typesBeingConnected.remove(sourceType);
-				sourceType.tagBits |= TagBits.EndHierarchyCheck;
-				connectPermittedTypes();
-				noProblems &= connectTypeVariables(this.referenceContext.typeParameters, false);
-				sourceType.tagBits |= TagBits.TypeVariablesAreConnected;
-				if (noProblems && sourceType.isHierarchyInconsistent())
-					problemReporter().hierarchyHasProblems(sourceType);
-			}
-			connectMemberTypes();
-		} finally {
-			compilationUnitScope.connectingHierarchy = wasAlreadyConnecting;
+		if ((sourceType.tagBits & TagBits.BeginHierarchyCheck) == 0) {
+			sourceType.tagBits |= TagBits.BeginHierarchyCheck;
+			environment().typesBeingConnected.add(sourceType);
+			boolean noProblems = connectSuperclass();
+			noProblems &= connectSuperInterfaces();
+			environment().typesBeingConnected.remove(sourceType);
+			sourceType.tagBits |= TagBits.EndHierarchyCheck;
+//			connectPermittedTypes();
+			noProblems &= connectTypeVariables(this.referenceContext.typeParameters, false);
+			sourceType.tagBits |= TagBits.TypeVariablesAreConnected;
+			if (noProblems && sourceType.isHierarchyInconsistent())
+				problemReporter().hierarchyHasProblems(sourceType);
 		}
+		connectMemberTypes();
 		LookupEnvironment env = environment();
 		try {
 			env.missingClassFileLocation = this.referenceContext;
@@ -1469,18 +1497,6 @@ public class ClassScope extends Scope {
 			throw e;
 		} finally {
 			env.missingClassFileLocation = null;
-		}
-	}
-
-	@Override
-	public boolean deferCheck(Runnable check) {
-		if (compilationUnitScope().connectingHierarchy) {
-			if (this.deferredBoundChecks == null)
-				this.deferredBoundChecks = new ArrayList<>();
-			this.deferredBoundChecks.add(check);
-			return true;
-		} else {
-			return false;
 		}
 	}
 
@@ -1499,24 +1515,17 @@ public class ClassScope extends Scope {
 		if ((sourceType.tagBits & TagBits.BeginHierarchyCheck) != 0)
 			return;
 
-		CompilationUnitScope compilationUnitScope = compilationUnitScope();
-		boolean wasAlreadyConnecting = compilationUnitScope.connectingHierarchy;
-		compilationUnitScope.connectingHierarchy = true;
-		try {
-			sourceType.tagBits |= TagBits.BeginHierarchyCheck;
-			environment().typesBeingConnected.add(sourceType);
-			boolean noProblems = connectSuperclass();
-			noProblems &= connectSuperInterfaces();
-			environment().typesBeingConnected.remove(sourceType);
-			sourceType.tagBits |= TagBits.EndHierarchyCheck;
-			connectPermittedTypes();
-			noProblems &= connectTypeVariables(this.referenceContext.typeParameters, false);
-			sourceType.tagBits |= TagBits.TypeVariablesAreConnected;
-			if (noProblems && sourceType.isHierarchyInconsistent())
-				problemReporter().hierarchyHasProblems(sourceType);
-		} finally {
-			compilationUnitScope.connectingHierarchy = wasAlreadyConnecting;
-		}
+		sourceType.tagBits |= TagBits.BeginHierarchyCheck;
+		environment().typesBeingConnected.add(sourceType);
+		boolean noProblems = connectSuperclass();
+		noProblems &= connectSuperInterfaces();
+		environment().typesBeingConnected.remove(sourceType);
+		sourceType.tagBits |= TagBits.EndHierarchyCheck;
+		connectPermittedTypes();
+		noProblems &= connectTypeVariables(this.referenceContext.typeParameters, false);
+		sourceType.tagBits |= TagBits.TypeVariablesAreConnected;
+		if (noProblems && sourceType.isHierarchyInconsistent())
+			problemReporter().hierarchyHasProblems(sourceType);
 	}
 
 	public boolean detectHierarchyCycle(TypeBinding superType, TypeReference reference) {
@@ -1683,6 +1692,14 @@ public class ClassScope extends Scope {
 			env.missingClassFileLocation = typeReference;
 			typeReference.aboutToResolve(this); // allows us to trap completion & selection nodes
 			unitScope.recordQualifiedReference(typeReference.getTypeName());
+			if (typeReference.isParameterizedTypeReference()) {
+				for (TypeReference [] typeArguments : typeReference.getTypeArguments()) {
+					if (typeArguments != null && typeArguments.length > 0) {
+						problemReporter().invalidTypeArguments(typeArguments);
+					}
+				}
+			}
+			typeReference.bits |= ASTNode.IgnoreRawTypeCheck;
 			ReferenceBinding permittedType = (ReferenceBinding) typeReference.resolveType(this);
 			return permittedType;
 		} catch (AbortCompilation e) {
@@ -1716,6 +1733,24 @@ public class ClassScope extends Scope {
 	*/
 	public TypeDeclaration referenceType() {
 		return this.referenceContext;
+	}
+
+	public final MethodBinding enclosingMethod() {
+		Scope scope = this;
+		while ((scope = scope.parent) != null) {
+			if (scope instanceof MethodScope) {
+				MethodScope methodScope = (MethodScope) scope;
+				/* 4.7.7 The EnclosingMethod Attribute: ... In particular, method_index must be zero if the current class
+				 * was immediately enclosed in source code by an instance initializer, static initializer, instance variable initializer, or
+				 * class variable initializer....
+				 */
+				if (methodScope.referenceContext instanceof TypeDeclaration)
+					return null;
+				if (methodScope.referenceContext instanceof AbstractMethodDeclaration)
+					return ((MethodScope) scope).referenceMethodBinding();
+			}
+		}
+		return null; // may answer null if no method around
 	}
 
 	@Override

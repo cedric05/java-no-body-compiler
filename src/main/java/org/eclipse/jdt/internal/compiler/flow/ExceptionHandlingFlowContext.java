@@ -65,7 +65,7 @@ public class ExceptionHandlingFlowContext extends FlowContext {
 	private static final Argument[] NO_ARGUMENTS = new Argument[0];
 	public  Argument [] catchArguments;
 
-	private int[] exceptionToCatchBlockMap;
+	private final int[] exceptionToCatchBlockMap;
 
 public ExceptionHandlingFlowContext(
 			FlowContext parent,
@@ -213,7 +213,7 @@ public FlowContext getInitializationContext() {
 
 @Override
 public String individualToString() {
-	StringBuffer buffer = new StringBuffer("Exception flow context"); //$NON-NLS-1$
+	StringBuilder buffer = new StringBuilder("Exception flow context"); //$NON-NLS-1$
 	int length = this.handledExceptions.length;
 	for (int i = 0; i < length; i++) {
 		int cacheIndex = i / ExceptionHandlingFlowContext.BitCacheSize;

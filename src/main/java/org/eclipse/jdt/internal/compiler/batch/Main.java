@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2020 IBM Corporation and others.
+ * Copyright (c) 2000, 2023 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -46,7 +46,6 @@ import java.io.LineNumberReader;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.io.StringReader;
-import java.io.StringWriter;
 import java.io.UnsupportedEncodingException;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
@@ -73,6 +72,7 @@ import java.util.ResourceBundle;
 import java.util.Set;
 import java.util.StringTokenizer;
 import java.util.function.Function;
+import java.util.stream.IntStream;
 
 import org.eclipse.jdt.core.compiler.CategorizedProblem;
 import org.eclipse.jdt.core.compiler.CharOperation;
@@ -122,10 +122,10 @@ import org.eclipse.jdt.internal.compiler.util.Util;
 public class Main implements ProblemSeverities, SuffixConstants {
 
 	public static class Logger {
-		private PrintWriter err;
+		private final PrintWriter err;
 		private PrintWriter log;
-		private Main main;
-		private PrintWriter out;
+		private final Main main;
+		private final PrintWriter out;
 		int tagBits;
 		private static final String CLASS = "class"; //$NON-NLS-1$
 		private static final String CLASS_FILE = "classfile"; //$NON-NLS-1$
@@ -194,7 +194,7 @@ public class Main implements ProblemSeverities, SuffixConstants {
 		private static final String INFO = "INFO"; //$NON-NLS-1$
 
 		public static final int XML = 1;
-		private static final String XML_DTD_DECLARATION = "<!DOCTYPE compiler PUBLIC \"-//Eclipse.org//DTD Eclipse JDT 3.2.006 Compiler//EN\" \"http://www.eclipse.org/jdt/core/compiler_32_006.dtd\">"; //$NON-NLS-1$
+		private static final String XML_DTD_DECLARATION = "<!DOCTYPE compiler PUBLIC \"-//Eclipse.org//DTD Eclipse JDT 3.2.006 Compiler//EN\" \"https://www.eclipse.org/jdt/core/compiler_32_006.dtd\">"; //$NON-NLS-1$
 		static {
 			try {
 				Class<?> c = IProblem.class;
@@ -228,7 +228,7 @@ public class Main implements ProblemSeverities, SuffixConstants {
 
 			outputPath = outputPath.replace('/', fileSeparatorChar);
 			// To be able to pass the mkdirs() method we need to remove the extra file separator at the end of the outDir name
-			StringBuffer outDir = new StringBuffer(outputPath);
+			StringBuilder outDir = new StringBuilder(outputPath);
 			if (!outputPath.endsWith(fileSeparator)) {
 				outDir.append(fileSeparator);
 			}
@@ -253,9 +253,6 @@ public class Main implements ProblemSeverities, SuffixConstants {
 			}
 		}
 
-		/**
-		 *
-		 */
 		public void compiling() {
 			printlnOut(this.main.bind("progress.compiling")); //$NON-NLS-1$
 		}
@@ -317,7 +314,7 @@ public class Main implements ProblemSeverities, SuffixConstants {
 				|| (length = unitSource.length) == 0)
 				return Messages.problem_noSourceInformation;
 
-			StringBuffer errorBuffer = new StringBuffer();
+			StringBuilder errorBuffer = new StringBuilder();
 			if ((bits & Main.Logger.EMACS) == 0) {
 				errorBuffer.append(' ').append(Messages.bind(Messages.problem_atLine, String.valueOf(problem.getSourceLineNumber())));
 				errorBuffer.append(Util.LINE_SEPARATOR);
@@ -408,7 +405,7 @@ public class Main implements ProblemSeverities, SuffixConstants {
 			while ((c = unitSource[end]) == ' ' || c == '\t') end--;
 
 			// copy source
-			StringBuffer buffer = new StringBuffer();
+			StringBuilder buffer = new StringBuilder();
 			buffer.append(unitSource, begin, end - begin + 1);
 			HashMap<String, Object> parameters = new HashMap<>();
 			parameters.put(Logger.VALUE, String.valueOf(buffer));
@@ -574,27 +571,20 @@ public class Main implements ProblemSeverities, SuffixConstants {
 		 * @param e the given exception to log
 		 */
 		public void logException(Exception e) {
-			StringWriter writer = new StringWriter();
-			PrintWriter printWriter = new PrintWriter(writer);
-			e.printStackTrace(printWriter);
-			printWriter.flush();
-			printWriter.close();
-			final String stackTrace = writer.toString();
+			final String stackTrace = Util.getStackTrace(e).toString();
 			if ((this.tagBits & Logger.XML) != 0) {
-				LineNumberReader reader = new LineNumberReader(new StringReader(stackTrace));
-				String line;
-				int i = 0;
-				StringBuffer buffer = new StringBuffer();
+				StringBuilder buffer = new StringBuilder();
 				String message = e.getMessage();
-				if (message != null) {
-					buffer.append(message).append(Util.LINE_SEPARATOR);
-				}
-				try {
+				try (LineNumberReader reader = new LineNumberReader(new StringReader(stackTrace))) {
+					String line;
+					int i = 0;
+					if (message != null) {
+						buffer.append(message).append(Util.LINE_SEPARATOR);
+					}
 					while ((line = reader.readLine()) != null && i < 4) {
 						buffer.append(line).append(Util.LINE_SEPARATOR);
 						i++;
 					}
-					reader.close();
 				} catch (IOException e1) {
 					// ignore
 				}
@@ -718,9 +708,6 @@ public class Main implements ProblemSeverities, SuffixConstants {
 			this.printlnErr(this.main.bind("configure.incorrectVMVersionforAPT")); //$NON-NLS-1$
 		}
 
-		/**
-		 *
-		 */
 		public void logNoClassFileCreated(String outputDir, String relativeFileName, IOException e) {
 			if ((this.tagBits & Logger.XML) != 0) {
 				HashMap<String, Object> parameters = new HashMap<>();
@@ -740,9 +727,6 @@ public class Main implements ProblemSeverities, SuffixConstants {
 				}));
 		}
 
-		/**
-		 * @param exportedClassFilesCounter
-		 */
 		public void logNumberOfClassFilesGenerated(int exportedClassFilesCounter) {
 			if ((this.tagBits & Logger.XML) != 0) {
 				HashMap<String, Object> parameters = new HashMap<>();
@@ -909,11 +893,6 @@ public class Main implements ProblemSeverities, SuffixConstants {
 			return localErrorCount;
 		}
 
-		/**
-		 * @param globalProblemsCount
-		 * @param globalErrorsCount
-		 * @param globalWarningsCount
-		 */
 		public void logProblemsSummary(int globalProblemsCount,
 			int globalErrorsCount, int globalWarningsCount, int globalInfoCount, int globalTasksCount) {
 			if ((this.tagBits & Logger.XML) != 0) {
@@ -1002,9 +981,6 @@ public class Main implements ProblemSeverities, SuffixConstants {
 			}
 		}
 
-		/**
-		 *
-		 */
 		public void logProgress() {
 			printOut('.');
 		}
@@ -1019,9 +995,6 @@ public class Main implements ProblemSeverities, SuffixConstants {
 			printlnOut(this.main.bind("compile.repetition", //$NON-NLS-1$
 				String.valueOf(i + 1), String.valueOf(repetitions)));
 		}
-		/**
-		 * @param compilerStats
-		 */
 		public void logTiming(CompilerStats compilerStats) {
 			long time = compilerStats.elapsedTime();
 			long lineCount = compilerStats.lineCount;
@@ -1065,7 +1038,6 @@ public class Main implements ProblemSeverities, SuffixConstants {
 
 		/**
 		 * Print the usage of the compiler
-		 * @param usage
 		 */
 		public void logUsage(String usage) {
 			printlnOut(usage);
@@ -1221,9 +1193,6 @@ public class Main implements ProblemSeverities, SuffixConstants {
 			}
 		}
 
-		/**
-		 *
-		 */
 		public void printNewLine() {
 			this.out.println();
 		}
@@ -1272,7 +1241,7 @@ public class Main implements ProblemSeverities, SuffixConstants {
 			try {
 				int index = logFileName.lastIndexOf('.');
 				if (index != -1) {
-					if (logFileName.substring(index).toLowerCase().equals(".xml")) { //$NON-NLS-1$
+					if (logFileName.substring(index).equalsIgnoreCase(".xml")) { //$NON-NLS-1$
 						this.log = new GenericXMLWriter(new OutputStreamWriter(new FileOutputStream(logFileName, false), Util.UTF_8), Util.LINE_SEPARATOR, true);
 						this.tagBits |= Logger.XML;
 						// insert time stamp as comment
@@ -1908,7 +1877,6 @@ public void configure(String[] argv) {
 	String customDestinationPath = null;
 	String currentSourceDirectory = null;
 	String currentArg = Util.EMPTY_STRING;
-	String moduleName = null;
 
 	Set<String> specifiedEncodings = null;
 
@@ -1931,7 +1899,7 @@ public void configure(String[] argv) {
 			if (arg.startsWith("@")) { //$NON-NLS-1$
 				try {
 					LineNumberReader reader = new LineNumberReader(new StringReader(new String(Util.getFileCharContent(new File(arg.substring(1)), null))));
-					StringBuffer buffer = new StringBuffer();
+					StringBuilder buffer = new StringBuilder();
 					String line;
 					while((line = reader.readLine()) != null) {
 						line = line.trim();
@@ -2040,21 +2008,9 @@ public void configure(String[] argv) {
 				}
 
 				if (currentArg.endsWith(SuffixConstants.SUFFIX_STRING_java)) {
-					if (moduleName == null) {
-						// If the module-info.java was supplied via command line, that will be the
-						// de facto module for the other source files supplied via command line.
-						// TODO: This needs revisit in case a source file specified in command line is
-						// part of a --module-source-path
-						IModule mod = extractModuleDesc(currentArg);
-						if (mod != null) {
-							moduleName = new String(mod.name());
-							this.module = mod;
-						}
-					}
 					if (this.filenames == null) {
 						this.filenames = new String[argCount - index];
 						this.encodings = new String[argCount - index];
-						this.modNames = new String[argCount - index];
 						this.destinationPaths = new String[argCount - index];
 					} else if (filesCount == this.filenames.length) {
 						int length = this.filenames.length;
@@ -2076,15 +2032,8 @@ public void configure(String[] argv) {
 							(this.destinationPaths = new String[length + argCount - index]),
 							0,
 							length);
-						System.arraycopy(
-								this.modNames,
-								0,
-								(this.modNames = new String[length + argCount - index]),
-								0,
-								length);
 					}
 					this.filenames[filesCount] = currentArg;
-					this.modNames[filesCount] = moduleName;
 					this.encodings[filesCount++] = customEncoding;
 					// destination path cannot be specified upon an individual file
 					customEncoding = null;
@@ -2137,29 +2086,9 @@ public void configure(String[] argv) {
 						continue;
 					}
 				}
-				if (currentArg.equals("-15") || currentArg.equals("-15.0")) { //$NON-NLS-1$ //$NON-NLS-2$
-					if (didSpecifyCompliance) {
-						throw new IllegalArgumentException(
-							this.bind("configure.duplicateCompliance", currentArg)); //$NON-NLS-1$
-					}
-					didSpecifyCompliance = true;
-					this.options.put(CompilerOptions.OPTION_Compliance, CompilerOptions.VERSION_15);
-					mode = DEFAULT;
-					continue;
-				}
-				if (currentArg.equals("-16") || currentArg.equals("-16.0")) { //$NON-NLS-1$ //$NON-NLS-2$
-					if (didSpecifyCompliance) {
-						throw new IllegalArgumentException(
-							this.bind("configure.duplicateCompliance", currentArg)); //$NON-NLS-1$
-					}
-					didSpecifyCompliance = true;
-					this.options.put(CompilerOptions.OPTION_Compliance, CompilerOptions.VERSION_16);
-					mode = DEFAULT;
-					continue;
-				}
 				if (currentArg.equals("-d")) { //$NON-NLS-1$
 					if (this.destinationPath != null) {
-						StringBuffer errorMessage = new StringBuffer();
+						StringBuilder errorMessage = new StringBuilder();
 						errorMessage.append(currentArg);
 						if ((index + 1) < argCount) {
 							errorMessage.append(' ');
@@ -2178,7 +2107,7 @@ public void configure(String[] argv) {
 				}
 				if (currentArg.equals("-bootclasspath")) {//$NON-NLS-1$
 					if (bootclasspaths.size() > 0) {
-						StringBuffer errorMessage = new StringBuffer();
+						StringBuilder errorMessage = new StringBuilder();
 						errorMessage.append(currentArg);
 						if ((index + 1) < argCount) {
 							errorMessage.append(' ');
@@ -2199,7 +2128,7 @@ public void configure(String[] argv) {
 					mode = INSIDE_SYSTEM;
 					continue;
 				}
-				if (currentArg.equals("--module-path") || currentArg.equals("-p") || currentArg.equals("--processor-module-path")) { //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+				if (currentArg.equals("--module-path") || currentArg.equals("-p")) { //$NON-NLS-1$ //$NON-NLS-2$
 					mode = INSIDE_MODULEPATH_start;
 					continue;
 				}
@@ -2232,7 +2161,7 @@ public void configure(String[] argv) {
 				}
 				if (currentArg.equals("-sourcepath")) {//$NON-NLS-1$
 					if (sourcepathClasspathArg != null) {
-						StringBuffer errorMessage = new StringBuffer();
+						StringBuilder errorMessage = new StringBuilder();
 						errorMessage.append(currentArg);
 						if ((index + 1) < argCount) {
 							errorMessage.append(' ');
@@ -2249,7 +2178,7 @@ public void configure(String[] argv) {
 				}
 				if (currentArg.equals("-extdirs")) {//$NON-NLS-1$
 					if (extdirsClasspaths != null) {
-						StringBuffer errorMessage = new StringBuffer();
+						StringBuilder errorMessage = new StringBuilder();
 						errorMessage.append(currentArg);
 						if ((index + 1) < argCount) {
 							errorMessage.append(' ');
@@ -2263,7 +2192,7 @@ public void configure(String[] argv) {
 				}
 				if (currentArg.equals("-endorseddirs")) { //$NON-NLS-1$
 					if (endorsedDirClasspaths != null) {
-						StringBuffer errorMessage = new StringBuffer();
+						StringBuilder errorMessage = new StringBuilder();
 						errorMessage.append(currentArg);
 						if ((index + 1) < argCount) {
 							errorMessage.append(' ');
@@ -2959,7 +2888,7 @@ public void configure(String[] argv) {
 					this.annotationsFromClasspath = true;
 				} else {
 					if (this.annotationPaths == null)
-						this.annotationPaths = new ArrayList<String>();
+						this.annotationPaths = new ArrayList<>();
 					StringTokenizer tokens = new StringTokenizer(currentArg, File.pathSeparator);
 					while (tokens.hasMoreTokens())
 						this.annotationPaths.add(tokens.nextToken());
@@ -3010,17 +2939,10 @@ public void configure(String[] argv) {
 				(this.destinationPaths = new String[length + filesCount]),
 				0,
 				filesCount);
-			System.arraycopy(
-					this.modNames,
-					0,
-					(this.modNames = new String[length + filesCount]),
-					0,
-					filesCount);
 			System.arraycopy(result, 0, this.filenames, filesCount, length);
 			for (int i = 0; i < length; i++) {
 				this.encodings[filesCount + i] = customEncoding;
 				this.destinationPaths[filesCount + i] = customDestinationPath;
-				this.modNames[filesCount + i] = moduleName;
 			}
 			filesCount += length;
 			customEncoding = null;
@@ -3031,7 +2953,6 @@ public void configure(String[] argv) {
 			filesCount = this.filenames.length;
 			this.encodings = new String[filesCount];
 			this.destinationPaths = new String[filesCount];
-			this.modNames = new String[filesCount];
 			for (int i = 0; i < filesCount; i++) {
 				this.encodings[i] = customEncoding;
 				this.destinationPaths[i] = customDestinationPath;
@@ -3126,6 +3047,8 @@ public void configure(String[] argv) {
 			(this.filenames = new String[filesCount]),
 			0,
 			filesCount);
+
+		this.modNames = new String[filesCount];
 	}
 
 	if (classCount != 0) {
@@ -3135,6 +3058,10 @@ public void configure(String[] argv) {
 			(this.classNames = new String[classCount]),
 			0,
 			classCount);
+	}
+
+	if (moduleSourcepathArg == null) {
+		handleSingleModuleCompilation();
 	}
 
 	setPaths(bootclasspaths,
@@ -3206,6 +3133,21 @@ private String optionStringToVersion(String currentArg) {
 		case "16": //$NON-NLS-1$
 		case "16.0": //$NON-NLS-1$
 			return CompilerOptions.VERSION_16;
+		case "17": //$NON-NLS-1$
+		case "17.0": //$NON-NLS-1$
+			return CompilerOptions.VERSION_17;
+		case "18": //$NON-NLS-1$
+		case "18.0": //$NON-NLS-1$
+			return CompilerOptions.VERSION_18;
+		case "19": //$NON-NLS-1$
+		case "19.0": //$NON-NLS-1$
+			return CompilerOptions.VERSION_19;
+		case "20": //$NON-NLS-1$
+		case "20.0": //$NON-NLS-1$
+			return CompilerOptions.VERSION_20;
+		case "21": //$NON-NLS-1$
+		case "21.0": //$NON-NLS-1$
+			return CompilerOptions.VERSION_21;
 		default:
 			return null;
 	}
@@ -3232,13 +3174,13 @@ private Parser getNewParser() {
 }
 private IModule extractModuleDesc(String fileName) {
 	IModule mod = null;
-	// this.options may not be completely populated yet, and definitely not
-	// validated. Make sure the source level is set for the parser
-	Map<String,String> opts = new HashMap<String, String>(this.options);
-	opts.put(CompilerOptions.OPTION_Source, this.options.get(CompilerOptions.OPTION_Compliance));
-	Parser parser = new Parser(new ProblemReporter(getHandlingPolicy(),
-			new CompilerOptions(opts), getProblemFactory()), false);
 	if (fileName.toLowerCase().endsWith(IModule.MODULE_INFO_JAVA)) {
+		// this.options may not be completely populated yet, and definitely not
+		// validated. Make sure the source level is set for the parser
+		Map<String,String> opts = new HashMap<>(this.options);
+		opts.put(CompilerOptions.OPTION_Source, this.options.get(CompilerOptions.OPTION_Compliance));
+		Parser parser = new Parser(new ProblemReporter(getHandlingPolicy(),
+				new CompilerOptions(opts), getProblemFactory()), false);
 
 		ICompilationUnit cu = new CompilationUnit(null, fileName, null);
 		CompilationResult compilationResult = new CompilationResult(cu, 0, 1, 10);
@@ -3297,7 +3239,7 @@ private static String getAllEncodings(Set<String> encodings) {
 	String[] allEncodings = new String[size];
 	encodings.toArray(allEncodings);
 	Arrays.sort(allEncodings);
-	StringBuffer buffer = new StringBuffer();
+	StringBuilder buffer = new StringBuilder();
 	for (int i = 0; i < size; i++) {
 		if (i > 0) {
 			buffer.append(", "); //$NON-NLS-1$
@@ -3312,23 +3254,13 @@ private void initializeWarnings(String propertiesFile) {
 	if (!file.exists()) {
 		throw new IllegalArgumentException(this.bind("configure.missingwarningspropertiesfile", propertiesFile)); //$NON-NLS-1$
 	}
-	BufferedInputStream stream = null;
 	Properties properties = null;
-	try {
-		stream = new BufferedInputStream(new FileInputStream(propertiesFile));
+	try (BufferedInputStream stream = new BufferedInputStream(new FileInputStream(propertiesFile))) {
 		properties = new Properties();
 		properties.load(stream);
 	} catch(IOException e) {
 		e.printStackTrace();
 		throw new IllegalArgumentException(this.bind("configure.ioexceptionwarningspropertiesfile", propertiesFile)); //$NON-NLS-1$
-	} finally {
-		if (stream != null) {
-			try {
-				stream.close();
-			} catch(IOException e) {
-				// ignore
-			}
-		}
 	}
 	for(Iterator iterator = properties.entrySet().iterator(); iterator.hasNext(); ) {
 		Map.Entry entry = (Map.Entry) iterator.next();
@@ -3431,9 +3363,13 @@ public CompilationUnit[] getCompilationUnits() {
 	String defaultEncoding = this.options.get(CompilerOptions.OPTION_Encoding);
 	if (Util.EMPTY_STRING.equals(defaultEncoding))
 		defaultEncoding = null;
-
+	// sort index by file names so we have a consistent order of compiling / handling them
+	// this is important as the order can influence the way for example lamda numbers are generated
+	int[] orderedIndex = IntStream.range(0, fileCount).boxed().sorted((i1, i2) -> {
+		return this.filenames[i1].compareTo(this.filenames[i2]);
+	}).mapToInt(i -> i).toArray();
 	for (int round = 0; round < 2; round++) {
-		for (int i = 0; i < fileCount; i++) {
+		for (int i : orderedIndex) {
 			char[] charName = this.filenames[i].toCharArray();
 			boolean isModuleInfo = CharOperation.endsWith(charName, TypeConstants.MODULE_INFO_FILE_NAME);
 			if (isModuleInfo == (round==0)) { // 1st round: modules, 2nd round others (to ensure populating pathToModCU well in time)
@@ -3570,6 +3506,11 @@ private void processAddonModuleOptions(FileSystem env) {
 		AddExport addExport = ModuleFinder.extractAddonExport(option);
 		if (addExport != null) {
 			String modName = addExport.sourceModuleName;
+			for (Classpath classpath : this.checkedClasspaths) {
+				if (classpath.forbidsExportFrom(modName)) {
+					throw new IllegalArgumentException(this.bind("configure.illegalExportFromSystemModule", modName)); //$NON-NLS-1$
+				}
+			}
 			IPackageExport export = addExport.export;
 			IPackageExport[] existing = exports.get(modName);
 			if (existing == null) {
@@ -3625,7 +3566,6 @@ protected ArrayList<FileSystem.Classpath> handleModuleSourcepath(String arg) {
 	ArrayList<FileSystem.Classpath> result = new ArrayList<>();
 	if ((modulePaths != null)
 		&& (modulePaths.size() != 0)) {
-
 		if (this.destinationPath == null) {
 			addPendingErrors(this.bind("configure.missingDestinationPath"));//$NON-NLS-1$
 		}
@@ -3670,6 +3610,29 @@ protected ArrayList<FileSystem.Classpath> handleModuleSourcepath(String arg) {
 		}
 	}
 	return result;
+}
+private void handleSingleModuleCompilation() {
+	if (this.filenames == null) {
+		return;
+	}
+	IModule singleMod = null;
+	for (String filename : this.filenames) {
+		IModule mod = extractModuleDesc(filename);
+		if (mod != null) {
+			if (singleMod == null) {
+				singleMod = mod;
+			} else {
+				addPendingErrors(this.bind("configure.duplicateModuleInfo", filename)); //$NON-NLS-1$
+			}
+		}
+	}
+	if (singleMod != null) {
+		String moduleName = new String(singleMod.name());
+		for (int i = 0; i < this.modNames.length; i++) {
+			this.modNames[i] = moduleName;
+		}
+		this.module = singleMod;
+	}
 }
 /*
  * External API
@@ -4652,12 +4615,12 @@ protected void initializeAnnotationProcessorManager() {
 	String className = "org.eclipse.jdt.internal.compiler.apt.dispatch.BatchAnnotationProcessorManager"; //$NON-NLS-1$
 	try {
 		Class<?> c = Class.forName(className);
-		AbstractAnnotationProcessorManager annotationManager = (AbstractAnnotationProcessorManager) c.newInstance();
+		AbstractAnnotationProcessorManager annotationManager = (AbstractAnnotationProcessorManager) c.getDeclaredConstructor().newInstance();
 		annotationManager.configure(this, this.expandedCommandLine);
 		annotationManager.setErr(this.err);
 		annotationManager.setOut(this.out);
 		this.batchCompiler.annotationProcessorManager = annotationManager;
-	} catch (ClassNotFoundException | InstantiationException e) {
+	} catch (ClassNotFoundException | InstantiationException | NoSuchMethodException | InvocationTargetException e) {
 		this.logger.logUnavaibleAPT(className);
 		throw new org.eclipse.jdt.internal.compiler.problem.AbortCompilation();
 	} catch (IllegalAccessException e) {
@@ -5119,7 +5082,7 @@ private int processPaths(String[] args, int index, String currentArg, ArrayList<
 				this.bind("configure.unexpectedBracket", //$NON-NLS-1$
 							currentArg));
 	} else {
-		StringBuffer currentPath = new StringBuffer(currentArg);
+		StringBuilder currentPath = new StringBuilder(currentArg);
 		while (true) {
 			if (localIndex >= args.length) {
 				throw new IllegalArgumentException(
@@ -5177,7 +5140,7 @@ private int processPaths(String[] args, int index, String currentArg, String[] p
 	if (count == 0) {
 		paths[0] = currentArg;
 	} else {
-		StringBuffer currentPath = new StringBuffer(currentArg);
+		StringBuilder currentPath = new StringBuilder(currentArg);
 		while (true) {
 			localIndex++;
 			if (localIndex >= args.length) {
@@ -5270,7 +5233,7 @@ protected void setPaths(ArrayList<String> bootclasspaths,
 
 	if (this.releaseVersion != null && this.complianceLevel < jdkLevel) {
 		// TODO: Revisit for access rules
-		allPaths = new ArrayList<Classpath>();
+		allPaths = new ArrayList<>();
 		allPaths.add(
 				FileSystem.getOlderSystemRelease(this.javaHomeCache.getAbsolutePath(), this.releaseVersion, null));
 	} else {

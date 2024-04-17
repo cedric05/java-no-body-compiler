@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2018 IBM Corporation and others.
+ * Copyright (c) 2000, 2021 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -100,6 +100,9 @@ public FlowInfo analyseAssignment(BlockScope currentScope, FlowContext flowConte
 				if (!fieldInits.isDefinitelyAssigned(lastFieldBinding)) {
 					currentScope.problemReporter().uninitializedBlankFinalField(lastFieldBinding, this);
 				}
+			}
+			if (needValue) {
+				checkInternalNPE(currentScope, flowContext, flowInfo, true);
 			}
 			break;
 		case Binding.LOCAL :
@@ -590,6 +593,8 @@ public FieldBinding generateReadSequence(BlockScope currentScope, CodeStream cod
 			lastGenericCast = null;
 			LocalVariableBinding localBinding = (LocalVariableBinding) this.binding;
 			lastReceiverType = localBinding.type;
+			// checkEffectiveFinality() returns if it's outer local
+			boolean capturedInOuter = checkEffectiveFinality(localBinding, currentScope);
 			if (!needValue) break; // no value needed
 			// regular local variable read
 			Constant localConstant = localBinding.constant();
@@ -597,9 +602,7 @@ public FieldBinding generateReadSequence(BlockScope currentScope, CodeStream cod
 				codeStream.generateConstant(localConstant, 0);
 				// no implicit conversion
 			} else {
-				// outer local?
-				if ((this.bits & ASTNode.IsCapturedOuterLocal) != 0) {
-					checkEffectiveFinality(localBinding, currentScope);
+				if (capturedInOuter) {
 					// outer local can be reached either through a synthetic arg or a synthetic field
 					VariableBinding[] path = currentScope.getEmulationPath(localBinding);
 					codeStream.generateOuterAccess(path, this, localBinding, currentScope);
@@ -774,7 +777,7 @@ public TypeBinding getOtherFieldBindings(BlockScope scope) {
 				fieldReceiverType = fieldReceiverType.getErasureCompatibleType(field.declaringClass);// handle indirect inheritance thru variable secondary bound
 				FieldBinding originalBinding = previousField.original();
 				if (TypeBinding.notEquals(fieldReceiverType, oldReceiverType) || originalBinding.type.leafComponentType().isTypeVariable()) { // record need for explicit cast at codegen
-			    	setGenericCast(index-1,originalBinding.type.genericCast(fieldReceiverType)); // type cannot be base-type even in boxing case
+			    	setGenericCast(place,originalBinding.type.genericCast(fieldReceiverType)); // type cannot be base-type even in boxing case
 				}
 		    }
 			// only last field is actually a write access if any
@@ -893,7 +896,7 @@ public void manageEnclosingInstanceAccessIfNecessary(BlockScope currentScope, Fl
 }
 
 /**
- * index is <0 to denote write access emulation
+ * index is less then 0 to denote write access emulation
  */
 public void manageSyntheticAccessIfNecessary(BlockScope currentScope, FieldBinding fieldBinding, int index, FlowInfo flowInfo) {
 	if ((flowInfo.tagBits & FlowInfo.UNREACHABLE_OR_DEAD) != 0) return;
@@ -990,7 +993,7 @@ public TypeBinding postConversionType(Scope scope) {
 }
 
 @Override
-public StringBuffer printExpression(int indent, StringBuffer output) {
+public StringBuilder printExpression(int indent, StringBuilder output) {
 	for (int i = 0; i < this.tokens.length; i++) {
 		if (i > 0) output.append('.');
 		output.append(this.tokens[i]);

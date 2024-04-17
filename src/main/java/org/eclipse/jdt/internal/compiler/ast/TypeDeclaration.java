@@ -26,8 +26,10 @@ package org.eclipse.jdt.internal.compiler.ast;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -130,7 +132,7 @@ public void abort(int abortLevel, CategorizedProblem problem) {
 }
 
 /**
- * This method is responsible for adding a <clinit> method declaration to the type method collections.
+ * This method is responsible for adding a {@code <clinit>} method declaration to the type method collections.
  * Note that this implementation is inserting it in first place (as VAJ or javac), and that this
  * impacts the behavior of the method ConstantPool.resetForClinit(int. int), in so far as
  * the latter will have to reset the constant pool state accordingly (if it was added first, it does
@@ -235,7 +237,6 @@ public MethodDeclaration addMissingAbstractMethodFor(MethodBinding methodBinding
 
 /**
  *	Flow analysis for a local innertype
- *
  */
 @Override
 public FlowInfo analyseCode(BlockScope currentScope, FlowContext flowContext, FlowInfo flowInfo) {
@@ -258,7 +259,6 @@ public FlowInfo analyseCode(BlockScope currentScope, FlowContext flowContext, Fl
 
 /**
  *	Flow analysis for a member innertype
- *
  */
 public void analyseCode(ClassScope enclosingClassScope) {
 	if (this.ignoreFurtherInvestigation)
@@ -274,7 +274,6 @@ public void analyseCode(ClassScope enclosingClassScope) {
 
 /**
  *	Flow analysis for a local member innertype
- *
  */
 public void analyseCode(ClassScope currentScope, FlowContext flowContext, FlowInfo flowInfo) {
 	if (this.ignoreFurtherInvestigation)
@@ -295,7 +294,6 @@ public void analyseCode(ClassScope currentScope, FlowContext flowContext, FlowIn
 
 /**
  *	Flow analysis for a package member type
- *
  */
 public void analyseCode(CompilationUnitScope unitScope) {
 	if (this.ignoreFurtherInvestigation)
@@ -545,13 +543,13 @@ public MethodBinding createDefaultConstructorWithBinding(MethodBinding inherited
 			sourceType); //declaringClass
 	constructor.binding.tagBits |= (inheritedConstructorBinding.tagBits & TagBits.HasMissingType);
 	constructor.binding.modifiers |= ExtraCompilerModifiers.AccIsDefaultConstructor;
-	if (inheritedConstructorBinding.parameterNonNullness != null // this implies that annotation based null analysis is enabled
+	if (inheritedConstructorBinding.parameterFlowBits != null // this implies that annotation based null/resource analysis is enabled
 			&& argumentsLength > 0)
 	{
-		// copy nullness info from inherited constructor to the new constructor:
-		int len = inheritedConstructorBinding.parameterNonNullness.length;
-		System.arraycopy(inheritedConstructorBinding.parameterNonNullness, 0,
-				constructor.binding.parameterNonNullness = new Boolean[len], 0, len);
+		// copy flowbits from inherited constructor to the new constructor:
+		int len = inheritedConstructorBinding.parameterFlowBits.length;
+		System.arraycopy(inheritedConstructorBinding.parameterFlowBits, 0,
+				constructor.binding.parameterFlowBits = new byte[len], 0, len);
 	}
 	// TODO(stephan): do argument types already carry sufficient info about type annotations?
 
@@ -619,7 +617,7 @@ public AbstractMethodDeclaration declarationOf(MethodBinding methodBinding) {
  */
 public RecordComponent declarationOf(RecordComponentBinding recordComponentBinding) {
 	if (recordComponentBinding != null && this.recordComponents != null) {
-		for (int i = 0, max = this.fields.length; i < max; i++) {
+		for (int i = 0, max = this.recordComponents.length; i < max; i++) {
 			RecordComponent recordComponent;
 			if ((recordComponent = this.recordComponents[i]).binding == recordComponentBinding)
 				return recordComponent;
@@ -840,7 +838,10 @@ public boolean hasErrors() {
  *	Common flow analysis for all types
  */
 private void internalAnalyseCode(FlowContext flowContext, FlowInfo flowInfo) {
-	checkYieldUsage();
+	if (CharOperation.equals(this.name, TypeConstants.YIELD)) {
+		this.scope.problemReporter().validateRestrictedKeywords(this.name, this);
+	}
+
 	if (!this.binding.isUsed() && this.binding.isOrEnclosedByPrivateType()) {
 		if (!this.scope.referenceCompilationUnit().compilationResult.hasSyntaxError) {
 			this.scope.problemReporter().unusedPrivateType(this);
@@ -857,6 +858,10 @@ private void internalAnalyseCode(FlowContext flowContext, FlowInfo flowInfo) {
 			}
 		}
 	}
+
+	boolean useOwningAnnotations = this.scope.compilerOptions().isAnnotationBasedResourceAnalysisEnabled;
+	boolean isCloseable = this.binding.hasTypeBit(TypeIds.BitAutoCloseable|TypeIds.BitCloseable);
+	FieldDeclaration fieldNeedingClose = null;
 
 	// for local classes we use the flowContext as our parent, but never use an initialization context for this purpose
 	// see Bug 360328 - [compiler][null] detect null problems in nested code (local class inside a loop)
@@ -900,6 +905,9 @@ private void internalAnalyseCode(FlowContext flowContext, FlowInfo flowInfo) {
 				if (nonStaticFieldInfo == FlowInfo.DEAD_END) {
 					this.initializerScope.problemReporter().initializerMustCompleteNormally(field);
 					nonStaticFieldInfo = FlowInfo.initial(this.maxFieldCount).setReachMode(FlowInfo.UNREACHABLE_OR_DEAD);
+				}
+				if (fieldNeedingClose == null && useOwningAnnotations && isCloseable && (field.binding.tagBits & TagBits.AnnotationOwning) != 0) {
+					fieldNeedingClose = field;
 				}
 			}
 		}
@@ -954,24 +962,18 @@ private void internalAnalyseCode(FlowContext flowContext, FlowInfo flowInfo) {
 				}
 				// pass down the parentContext (NOT an initializer context, see above):
 				((MethodDeclaration)method).analyseCode(this.scope, parentContext, flowInfo.copy());
+				if (fieldNeedingClose != null && CharOperation.equals(TypeConstants.CLOSE, method.selector) && method.arguments == null) {
+					fieldNeedingClose = null;
+				}
 			}
 		}
+	}
+	if (fieldNeedingClose != null) {
+		this.scope.problemReporter().missingImplementationOfClose(fieldNeedingClose);
 	}
 	// enable enum support ?
 	if (this.binding.isEnum() && !this.binding.isAnonymousType()) {
 		this.enumValuesSyntheticfield = this.binding.addSyntheticFieldForEnumValues();
-	}
-}
-
-private void checkYieldUsage() {
-	long sourceLevel = this.scope.compilerOptions().sourceLevel;
-	if (sourceLevel < ClassFileConstants.JDK14 || this.name == null ||
-			!("yield".equals(new String(this.name)))) //$NON-NLS-1$
-		return;
-	if (sourceLevel >= ClassFileConstants.JDK14) {
-		this.scope.problemReporter().switchExpressionsYieldTypeDeclarationError(this);
-	} else {
-		this.scope.problemReporter().switchExpressionsYieldTypeDeclarationWarning(this);
 	}
 }
 
@@ -1010,7 +1012,7 @@ private void addJUnitMethodSourceValues(SimpleSetOfCharArray junitMethodSourceVa
 
 private char[] getValueAsChars(Expression value) {
 	if (value instanceof StringLiteral) { // e.g. "someMethod"
-		return ((StringLiteral) value).source;
+		return ((StringLiteral) value).source();
 	} else if (value.constant instanceof StringConstant) { // e.g. SOME_CONSTANT + "value"
 		return ((StringConstant) value.constant).stringValue().toCharArray();
 	}
@@ -1103,7 +1105,7 @@ public void manageEnclosingInstanceAccessIfNecessary(ClassScope currentScope, Fl
 }
 
 /**
- * A <clinit> will be requested as soon as static fields or assertions are present. It will be eliminated during
+ * A {@code <clinit>} will be requested as soon as static fields or assertions are present. It will be eliminated during
  * classfile creation if no bytecode was actually produced based on some optimizations/compiler settings.
  */
 public final boolean needClassInitMethod() {
@@ -1170,7 +1172,7 @@ public void parseMethods(Parser parser, CompilationUnitDeclaration unit) {
 }
 
 @Override
-public StringBuffer print(int indent, StringBuffer output) {
+public StringBuilder print(int indent, StringBuilder output) {
 	if (this.javadoc != null) {
 		this.javadoc.print(indent, output);
 	}
@@ -1181,7 +1183,7 @@ public StringBuffer print(int indent, StringBuffer output) {
 	return printBody(indent, output);
 }
 
-public StringBuffer printBody(int indent, StringBuffer output) {
+public StringBuilder printBody(int indent, StringBuilder output) {
 	output.append(" {"); //$NON-NLS-1$
 	if (this.memberTypes != null) {
 		for (int i = 0; i < this.memberTypes.length; i++) {
@@ -1211,7 +1213,7 @@ public StringBuffer printBody(int indent, StringBuffer output) {
 	return printIndent(indent, output).append('}');
 }
 
-public StringBuffer printHeader(int indent, StringBuffer output) {
+public StringBuilder printHeader(int indent, StringBuilder output) {
 	printModifiers(this.modifiers, output);
 	if (this.annotations != null) {
 		printAnnotations(this.annotations, output);
@@ -1289,7 +1291,7 @@ public StringBuffer printHeader(int indent, StringBuffer output) {
 }
 
 @Override
-public StringBuffer printStatement(int tab, StringBuffer output) {
+public StringBuilder printStatement(int tab, StringBuilder output) {
 	return print(tab, output);
 }
 
@@ -1329,7 +1331,7 @@ public void resolve() {
 			}
 		}
 
-		if ((this.bits & ASTNode.UndocumentedEmptyBlock) != 0) {
+		if ((this.bits & ASTNode.UndocumentedEmptyBlock) != 0 && this.nRecordComponents == 0) {
 			this.scope.problemReporter().undocumentedEmptyBlock(this.bodyStart-1, this.bodyEnd);
 		}
 		boolean needSerialVersion =
@@ -1445,6 +1447,9 @@ public void resolve() {
 						 ((Initializer) field).lastVisibleFieldID = lastVisibleFieldID + 1;
 						break;
 				}
+				if (this.isRecord()) {
+					field.javadoc = this.javadoc;
+				}
 				field.resolve(field.isStatic() ? this.staticInitializerScope : this.initializerScope);
 			}
 		}
@@ -1522,13 +1527,17 @@ public void resolve() {
 			// Set javadoc visibility
 			int visibility = sourceType.modifiers & ExtraCompilerModifiers.AccVisibilityMASK;
 			ProblemReporter reporter = this.scope.problemReporter();
-			int severity = reporter.computeSeverity(IProblem.JavadocMissing);
-			if (severity != ProblemSeverities.Ignore) {
-				if (this.enclosingType != null) {
-					visibility = Util.computeOuterMostVisibility(this.enclosingType, visibility);
+			try {
+				int severity = reporter.computeSeverity(IProblem.JavadocMissing);
+				if (severity != ProblemSeverities.Ignore) {
+					if (this.enclosingType != null) {
+						visibility = Util.computeOuterMostVisibility(this.enclosingType, visibility);
+					}
+					int javadocModifiers = (this.binding.modifiers & ~ExtraCompilerModifiers.AccVisibilityMASK) | visibility;
+					reporter.javadocMissing(this.sourceStart, this.sourceEnd, severity, javadocModifiers);
 				}
-				int javadocModifiers = (this.binding.modifiers & ~ExtraCompilerModifiers.AccVisibilityMASK) | visibility;
-				reporter.javadocMissing(this.sourceStart, this.sourceEnd, severity, javadocModifiers);
+			} finally {
+				reporter.close();
 			}
 		}
 		updateNestHost();
@@ -1650,7 +1659,6 @@ public void tagAsHavingIgnoredMandatoryErrors(int problemId) {
 
 /**
  *	Iteration for a package member type
- *
  */
 public void traverse(ASTVisitor visitor, CompilationUnitScope unitScope) {
 	try {
@@ -1782,7 +1790,6 @@ public void traverse(ASTVisitor visitor, BlockScope blockScope) {
 
 /**
  *	Iteration for a member innertype
- *
  */
 public void traverse(ASTVisitor visitor, ClassScope classScope) {
 	try {
@@ -1889,5 +1896,61 @@ public boolean isPackageInfo() {
 public boolean isSecondary() {
 	return (this.bits & ASTNode.IsSecondaryType) != 0;
 }
+public void updateSupertypesWithAnnotations(Map<ReferenceBinding,ReferenceBinding> outerUpdates) {
+	if (this.binding == null)
+		return;
+	this.binding.getAnnotationTagBits();
+	if (this.binding instanceof MemberTypeBinding) {
+		((MemberTypeBinding) this.binding).updateDeprecationFromEnclosing();
+	}
+	Map<ReferenceBinding,ReferenceBinding> updates = new HashMap<>();
+	if (this.typeParameters != null) {
+		for (TypeParameter typeParameter : this.typeParameters) {
+			typeParameter.updateWithAnnotations(this.scope); // TODO: need to integrate with outerUpdates/updates?
+		}
+	}
+	if (this.superclass != null) {
+		this.binding.superclass = updateWithAnnotations(this.superclass, this.binding.superclass, outerUpdates, updates);
+	}
+	if (this.superInterfaces != null) {
+		ReferenceBinding[] superIfcBindings = this.binding.superInterfaces;
+		boolean areBindingsConsistent = superIfcBindings != null && superIfcBindings.length == this.superInterfaces.length;
+		for (int i = 0; i < this.superInterfaces.length; i++) {
+			ReferenceBinding previous = areBindingsConsistent ? superIfcBindings[i] : null;
+			ReferenceBinding updated = updateWithAnnotations(this.superInterfaces[i], previous, outerUpdates, updates);
+			if (areBindingsConsistent)
+				superIfcBindings[i] = updated;
+		}
+	}
+	if (this.memberTypes != null) {
+		for (TypeDeclaration memberTypesDecl : this.memberTypes) {
+			memberTypesDecl.updateSupertypesWithAnnotations(updates);
+		}
+	}
+	if (this.scope.compilerOptions().isAnnotationBasedResourceAnalysisEnabled) {
+		this.binding.detectWrapperResource(); // needs field an methods built
+	}
+}
 
+protected ReferenceBinding updateWithAnnotations(TypeReference typeRef, ReferenceBinding previousType,
+		Map<ReferenceBinding, ReferenceBinding> outerUpdates, Map<ReferenceBinding, ReferenceBinding> updates)
+{
+	typeRef.updateWithAnnotations(this.scope, 0);
+	ReferenceBinding updatedType = (ReferenceBinding) typeRef.resolvedType;
+	if (updatedType instanceof ParameterizedTypeBinding) {
+		ParameterizedTypeBinding ptb = (ParameterizedTypeBinding) updatedType;
+		if (updatedType.enclosingType() != null && outerUpdates.containsKey(ptb.enclosingType())) {
+			updatedType = this.scope.environment().createParameterizedType(ptb.genericType(), ptb.typeArguments(), outerUpdates.get(ptb.enclosingType()));
+		}
+	}
+	if (updatedType == null || !updatedType.isValidBinding())
+		return previousType;
+	if (previousType != null) {
+		if (previousType.id == TypeIds.T_JavaLangObject && ((this.binding.tagBits & TagBits.HierarchyHasProblems) != 0))
+			return previousType; // keep this cycle breaker
+		if (previousType != updatedType) //$IDENTITY-COMPARISON$
+			updates.put(previousType, updatedType);
+	}
+	return updatedType;
+}
 }

@@ -16,13 +16,16 @@
  *******************************************************************************/
 package org.eclipse.jdt.internal.compiler.env;
 
+import org.eclipse.jdt.core.compiler.CharOperation;
+import org.eclipse.jdt.internal.compiler.util.Util;
+
 // clinit methods (synthetics too?) can be returned from IBinaryType>>getMethods()
 // BUT do not have to be... the compiler will ignore them when building the binding.
 // The synthetic argument of a member type's constructor (i.e. the first arg of a non-static
 // member type) is also ignored by the compiler, BUT in this case it must be included
 // in the constructor's signature.
 
-public interface IBinaryMethod extends IGenericMethod {
+public interface IBinaryMethod extends IGenericMethod, IBinaryInfo {
 
 /**
  * Answer the runtime visible and invisible annotations for this method or null if none.
@@ -57,12 +60,13 @@ char[][] getExceptionTypeNames();
 char[] getGenericSignature();
 
 /**
- * Answer the receiver's method descriptor which describes the parameter &
+ * Answer the receiver's method descriptor which describes the parameter and
  * return types as specified in section 4.4.3 of the Java 2 VM spec.
  *
- * For example:
+ * For example: <pre>
  *   - int foo(String) is (Ljava/lang/String;)I
  *   - Object[] foo(int) is (I)[Ljava/lang/Object;
+ * </pre>
  */
 char[] getMethodDescriptor();
 
@@ -83,7 +87,7 @@ int getAnnotatedParametersCount();
 /**
  * Answer the name of the method.
  *
- * For a constructor, answer <init> & <clinit> for a clinit method.
+ * For a constructor, answer {@code <init> & <clinit>} for a clinit method.
  */
 char[] getSelector();
 
@@ -101,4 +105,36 @@ boolean isClinit();
  * Answer the type annotations on this method.
  */
 IBinaryTypeAnnotation[] getTypeAnnotations();
+
+/**
+ * Answer the number of method parameters based on analysis of the method descriptor.
+ * @return the number of parameters or {@code -1} if the descriptor was malformed.
+ */
+default int getParameterCount() {
+	// copy-adjusted from org.eclipse.jdt.core.Signature.getParameterCount(char[])
+	char[] methodSignature = getMethodDescriptor();
+	try {
+		int count = 0;
+		int i = CharOperation.indexOf(Util.C_PARAM_START, methodSignature);
+		if (i < 0) {
+			return -1;
+		} else {
+			i++;
+		}
+		for (;;) {
+			if (methodSignature[i] == Util.C_PARAM_END) {
+				return count;
+			}
+			int e= Util.scanTypeSignature(methodSignature, i);
+			if (e < 0) {
+				return -1;
+			} else {
+				i = e + 1;
+			}
+			count++;
+		}
+	} catch (ArrayIndexOutOfBoundsException e) {
+		return -1;
+	}
+}
 }

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2006, 2015 IBM Corporation and others.
+ * Copyright (c) 2006, 2021 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -13,6 +13,7 @@
  *******************************************************************************/
 package org.eclipse.jdt.internal.compiler.tool;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -32,6 +33,7 @@ import javax.tools.JavaFileObject;
 import org.eclipse.jdt.internal.compiler.classfmt.ClassFileConstants;
 import org.eclipse.jdt.internal.compiler.classfmt.ClassFileReader;
 import org.eclipse.jdt.internal.compiler.classfmt.ClassFormatException;
+import org.eclipse.jdt.internal.compiler.util.JRTUtil;
 
 /**
  * Implementation of a Java file object that corresponds to an entry in a zip/jar file
@@ -39,25 +41,12 @@ import org.eclipse.jdt.internal.compiler.classfmt.ClassFormatException;
 public class ArchiveFileObject implements JavaFileObject {
 	protected String entryName;
 	protected File file;
-	private ZipFile zipFile;
 	protected Charset charset;
 
 	public ArchiveFileObject(File file, String entryName, Charset charset) {
 		this.entryName = entryName;
 		this.file = file;
 		this.charset = charset;
-	}
-
-	@Override
-	protected void finalize() throws Throwable {
-		if (this.zipFile != null) {
-			try {
-				this.zipFile.close();
-			} catch (IOException e) {
-				// ignore
-			}
-		}
-		super.finalize();
 	}
 
 	/* (non-Javadoc)
@@ -96,7 +85,13 @@ public class ArchiveFileObject implements JavaFileObject {
 		} catch (ClassFormatException e) {
 			// ignore
 		} catch (IOException e) {
-			// ignore
+			String error = "Failed to read entry " + this.entryName + " from archive " + this.file; //$NON-NLS-1$ //$NON-NLS-2$
+			if (JRTUtil.PROPAGATE_IO_ERRORS) {
+				throw new IllegalStateException(error, e);
+			} else {
+				System.err.println(error);
+				e.printStackTrace();
+			}
 		}
 		return reader;
 	}
@@ -215,12 +210,13 @@ public class ArchiveFileObject implements JavaFileObject {
 	 */
 	@Override
 	public InputStream openInputStream() throws IOException {
-		if (this.zipFile == null) {
-			this.zipFile = new ZipFile(this.file);
+		try (ZipFile zipFile = new ZipFile(this.file);
+				InputStream inputStream = zipFile.getInputStream(zipFile.getEntry(this.entryName));) {
+			ByteArrayInputStream buffer = new ByteArrayInputStream(inputStream.readAllBytes());
+			return buffer;
 		}
-		ZipEntry zipEntry = this.zipFile.getEntry(this.entryName);
-		return this.zipFile.getInputStream(zipEntry);
 	}
+
 
 	/* (non-Javadoc)
 	 * @see javax.tools.FileObject#openOutputStream()

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2020 IBM Corporation and others.
+ * Copyright (c) 2020, 2023 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -33,6 +33,11 @@ import org.eclipse.jdt.internal.compiler.util.Messages;
  */
 public enum JavaFeature {
 
+	SWITCH_EXPRESSIONS(ClassFileConstants.JDK14,
+			Messages.bind(Messages.switch_expression),
+			new char[][] {TypeConstants.YIELD},
+			false),
+
 	TEXT_BLOCKS(ClassFileConstants.JDK15,
 			Messages.bind(Messages.text_block),
 			new char[][] {},
@@ -48,9 +53,29 @@ public enum JavaFeature {
 			new char[][] {TypeConstants.RECORD_RESTRICTED_IDENTIFIER},
 			false),
 
-	SEALED_CLASSES(ClassFileConstants.JDK16,
+	SEALED_CLASSES(ClassFileConstants.JDK17,
 			Messages.bind(Messages.sealed_types),
 			new char[][] {TypeConstants.SEALED, TypeConstants.PERMITS},
+			false),
+	PATTERN_MATCHING_IN_SWITCH(ClassFileConstants.JDK21,
+			Messages.bind(Messages.pattern_matching_switch),
+			new char[][] {},
+			false),
+	RECORD_PATTERNS(ClassFileConstants.JDK21,
+			Messages.bind(Messages.record_patterns),
+			new char[][] {},
+			false),
+	UNNAMMED_PATTERNS_AND_VARS(ClassFileConstants.JDK21,
+			Messages.bind(Messages.unnamed_patterns_and_vars),
+			new char[][] {},
+			true),
+	UNNAMMED_CLASSES_AND_INSTANCE_MAIN_METHODS(ClassFileConstants.JDK21,
+			Messages.bind(Messages.unnamed_classes_and_instance_main_methods),
+			new char[][] {},
+			true),
+	STRING_TEMPLATES(ClassFileConstants.JDK21,
+			Messages.bind(Messages.string_templates),
+			new char[][] {},
 			true),
     ;
 
@@ -80,6 +105,11 @@ public enum JavaFeature {
 		if (this.isPreview)
 			return preview;
 		return this.getCompliance() <= comp;
+	}
+	public boolean isSupported(String comp, boolean preview) {
+		if (this.isPreview)
+			return preview;
+		return this.getCompliance() <= CompilerOptions.versionToJdkLevel(comp);
 	}
 
 	JavaFeature(long compliance, String name, char[][] restrictedKeywords, boolean isPreview) {

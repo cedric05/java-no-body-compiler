@@ -17,7 +17,7 @@ package org.eclipse.jdt.internal.compiler.lookup;
 
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -40,7 +40,7 @@ abstract class ConstraintFormula extends ReductionResult {
 	}
 
 	Collection<InferenceVariable> outputVariables(InferenceContext18 context) {
-		Set<InferenceVariable> variables = new HashSet<>();
+		Set<InferenceVariable> variables = new LinkedHashSet<>();
 		this.right.collectInferenceVariables(variables);
 		if (!variables.isEmpty())
 			variables.removeAll(inputVariables(context));
@@ -59,7 +59,7 @@ abstract class ConstraintFormula extends ReductionResult {
 	}
 
 	// for debug toString():
-	protected void appendTypeName(StringBuffer buf, TypeBinding type) {
+	protected void appendTypeName(StringBuilder buf, TypeBinding type) {
 		if (type instanceof CaptureBinding18)
 			buf.append(type.toString()); // contains more info than readable name
 		else

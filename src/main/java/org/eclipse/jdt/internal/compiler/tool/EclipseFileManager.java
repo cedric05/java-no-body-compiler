@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2006, 2019 IBM Corporation and others.
+ * Copyright (c) 2006, 2022 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -39,7 +39,6 @@ import java.util.ResourceBundle;
 import java.util.ServiceLoader;
 import java.util.Set;
 import java.util.StringTokenizer;
-import java.util.zip.ZipException;
 
 import javax.lang.model.SourceVersion;
 import javax.tools.FileObject;
@@ -67,6 +66,7 @@ import org.eclipse.jdt.internal.compiler.tool.JrtFileSystem.JrtFileObject;
 import org.eclipse.jdt.internal.compiler.tool.ModuleLocationHandler.LocationContainer;
 import org.eclipse.jdt.internal.compiler.tool.ModuleLocationHandler.LocationWrapper;
 import org.eclipse.jdt.internal.compiler.tool.ModuleLocationHandler.ModuleLocationWrapper;
+import org.eclipse.jdt.internal.compiler.util.JRTUtil;
 import org.eclipse.jdt.internal.compiler.util.Util;
 
 /**
@@ -83,7 +83,7 @@ public class EclipseFileManager implements StandardJavaFileManager {
 	Map<File, Archive> archivesCache;
 	Charset charset;
 	Locale locale;
-	ModuleLocationHandler locationHandler;
+	protected ModuleLocationHandler locationHandler;
 	final Map<Location, URLClassLoader> classloaders;
 	int flags;
 	boolean isOnJvm9;
@@ -102,8 +102,13 @@ public class EclipseFileManager implements StandardJavaFileManager {
 		try {
 			initialize(Util.getJavaHome());
 		} catch (IOException e) {
-			e.printStackTrace();
-			// ignore
+			String error = "Failed to init EclipseFileManager from " + Util.getJavaHome(); //$NON-NLS-1$
+			if (JRTUtil.PROPAGATE_IO_ERRORS) {
+				throw new IllegalStateException(error, e);
+			} else {
+				System.err.println(error);
+				e.printStackTrace();
+			}
 		}
 		try {
 			this.bundle = ResourceBundleFactory.getBundle(this.locale);
@@ -114,7 +119,9 @@ public class EclipseFileManager implements StandardJavaFileManager {
 	protected void initialize(File javahome) throws IOException {
 		if (this.isOnJvm9) {
 			this.jrtSystem = new JrtFileSystem(javahome);
-			this.archivesCache.put(javahome, this.jrtSystem);
+			try (Archive previous = this.archivesCache.put(javahome, this.jrtSystem)) {
+				// nothing. Only theoretically autoclose the previous instance - which does not exist at this time
+			}
 			this.jrtHome = javahome;
 			this.locationHandler.newSystemLocation(StandardLocation.SYSTEM_MODULES, this.jrtSystem);
 		} else {
@@ -125,6 +132,7 @@ public class EclipseFileManager implements StandardJavaFileManager {
 		// No annotation module path by default
 		this.setLocation(StandardLocation.ANNOTATION_PROCESSOR_PATH, defaultClasspath);
 	}
+
 	/* (non-Javadoc)
 	 * @see javax.tools.JavaFileManager#close()
 	 */
@@ -132,7 +140,9 @@ public class EclipseFileManager implements StandardJavaFileManager {
 	public void close() throws IOException {
 		this.locationHandler.close();
 		for (Archive archive : this.archivesCache.values()) {
-			archive.close();
+			if (archive != null) {
+				archive.close();
+			}
 		}
 		this.archivesCache.clear();
 		for (URLClassLoader cl : this.classloaders.values()) {
@@ -153,34 +163,37 @@ public class EclipseFileManager implements StandardJavaFileManager {
 				}
 			}
 		} else if (isArchive(file)) {
+			@SuppressWarnings("resource") // cached archive is closed in EclipseFileManager.close()
 			Archive archive = this.getArchive(file);
-			if (archive == Archive.UNKNOWN_ARCHIVE) return;
-			String key = normalizedPackageName;
-			if (!normalizedPackageName.endsWith("/")) {//$NON-NLS-1$
-				key += '/';
-			}
-			// we have an archive file
-			if (recurse) {
-				for (String packageName : archive.allPackages()) {
-					if (packageName.startsWith(key)) {
-						List<String[]> types = archive.getTypes(packageName);
-						if (types != null) {
-							for (String[] entry : types) {
-								final Kind kind = getKind(getExtension(entry[0]));
-								if (kinds.contains(kind)) {
-									collector.add(archive.getArchiveFileObject(packageName + entry[0], entry[1], this.charset));
+			if (archive != Archive.UNKNOWN_ARCHIVE) {
+				String key = normalizedPackageName;
+				if (!normalizedPackageName.endsWith("/")) {//$NON-NLS-1$
+					key += '/';
+				}
+				// we have an archive file
+				if (recurse) {
+					for (String packageName : archive.allPackages()) {
+						if (packageName.startsWith(key)) {
+							List<String[]> types = archive.getTypes(packageName);
+							if (types != null) {
+								for (String[] entry : types) {
+									final Kind kind = getKind(getExtension(entry[0]));
+									if (kinds.contains(kind)) {
+										collector.add(archive.getArchiveFileObject(packageName + entry[0], entry[1],
+												this.charset));
+									}
 								}
 							}
 						}
 					}
-				}
-			} else {
-				List<String[]> types = archive.getTypes(key);
-				if (types != null) {
-					for (String[] entry : types) {
-						final Kind kind = getKind(getExtension(entry[0]));
-						if (kinds.contains(kind)) {
-							collector.add(archive.getArchiveFileObject(key + entry[0], entry[1], this.charset));
+				} else {
+					List<String[]> types = archive.getTypes(key);
+					if (types != null) {
+						for (String[] entry : types) {
+							final Kind kind = getKind(getExtension(entry[0]));
+							if (kinds.contains(kind)) {
+								collector.add(archive.getArchiveFileObject(key + entry[0], entry[1], this.charset));
+							}
 						}
 					}
 				}
@@ -233,33 +246,44 @@ public class EclipseFileManager implements StandardJavaFileManager {
 	@Override
 	public void flush() throws IOException {
 		for (Archive archive : this.archivesCache.values()) {
-			archive.flush();
+			if (archive != null) {
+				archive.flush();
+			}
 		}
 	}
 
+	JrtFileSystem getJrtFileSystem(File f){
+		return (JrtFileSystem) getArchive(f);
+	}
+
+	@SuppressWarnings("resource") // Archive is returned to caller
 	private Archive getArchive(File f) {
 		// check the archive (jar/zip) cache
-		Archive archive = this.archivesCache.get(f);
-		if (archive == null) {
-			archive = Archive.UNKNOWN_ARCHIVE;
-			// create a new archive
-			if (f.exists()) {
-				try {
-					if (isJrt(f)) {
-						archive = new JrtFileSystem(f);
-					} else {
-						archive = new Archive(f);
-					}
-				} catch (ZipException e) {
-					// ignore
-				} catch (IOException e) {
-					// ignore
+		Archive existing = this.archivesCache.get(f);
+		if (existing != null) {
+			return existing;
+		}
+		Archive archive = Archive.UNKNOWN_ARCHIVE;
+		// create a new archive
+		if (f.exists()) {
+			try {
+				if (isJrt(f)) {
+					archive = new JrtFileSystem(f);
+				} else {
+					archive = new Archive(f);
 				}
-				if (archive != null) {
-					this.archivesCache.put(f, archive);
+			} catch (IOException e) {
+				String error = "Failed to create archive from " + f; //$NON-NLS-1$
+				if (JRTUtil.PROPAGATE_IO_ERRORS) {
+					throw new IllegalStateException(error, e);
+				} else {
+					System.err.println(error);
+					e.printStackTrace();
 				}
 			}
-			this.archivesCache.put(f, archive);
+		}
+		try (Archive previous = this.archivesCache.put(f, archive)) {
+			// Nothing but closing previous instance - which should not exist at this time
 		}
 		return archive;
 	}
@@ -288,7 +312,11 @@ public class EclipseFileManager implements StandardJavaFileManager {
 			}
 			URL[] result = new URL[allURLs.size()];
 			cl = new URLClassLoader(allURLs.toArray(result), getClass().getClassLoader());
-			this.classloaders.put(location, cl);
+			try (URLClassLoader previous = this.classloaders.put(location, cl)) {
+				// Nothing but closing previous instance - which should not exist at this time
+			} catch (IOException e) {
+				//ignore
+			}
 		}
 		return cl;
 	}
@@ -394,7 +422,7 @@ public class EclipseFileManager implements StandardJavaFileManager {
 		if (files == null) {
 			throw new IllegalArgumentException("Unknown location : " + location);//$NON-NLS-1$
 		}
-		String normalizedFileName = normalized(packageName) + '/' + relativeName.replace('\\', '/');
+		String normalizedFileName = normalizedFileName(packageName, relativeName);
 		for (File file : files) {
 			if (file.isDirectory()) {
 				// handle directory
@@ -406,15 +434,45 @@ public class EclipseFileManager implements StandardJavaFileManager {
 				}
 			} else if (isArchive(file)) {
 				// handle archive file
-				Archive archive = getArchive(file);
-				if (archive != Archive.UNKNOWN_ARCHIVE) {
-					if (archive.contains(normalizedFileName)) {
-						return archive.getArchiveFileObject(normalizedFileName, null, this.charset);
-					}
+				ArchiveFileObject fileObject = getFileObject(file, normalizedFileName);
+				if (fileObject!=null) {
+					return fileObject;
 				}
 			}
 		}
 		return null;
+	}
+
+	@SuppressWarnings("resource") // cached archive is closed in EclipseFileManager.close()
+	private ArchiveFileObject getFileObject(File archiveFile, String normalizedFileName) {
+		Archive archive = getArchive(archiveFile);
+		if (archive == Archive.UNKNOWN_ARCHIVE) {
+			return null;
+		}
+		if (archive.contains(normalizedFileName)) {
+			return archive.getArchiveFileObject(normalizedFileName, null, this.charset);
+		}
+		return null;
+	}
+
+	@SuppressWarnings("resource") // cached archive is closed in EclipseFileManager.close()
+	private Boolean containsFileObject(File archiveFile, String normalizedFileName) {
+		Archive archive = getArchive(archiveFile);
+		if (archive == Archive.UNKNOWN_ARCHIVE) {
+			return null;
+		}
+		return archive.contains(normalizedFileName);
+	}
+
+
+	private String normalizedFileName(String packageName, String relativeName) {
+		StringBuilder sb = new StringBuilder();
+		sb.append(normalized(packageName));
+		if (sb.length() > 0) {
+			sb.append('/');
+		}
+		sb.append(relativeName.replace('\\', '/'));
+		return sb.toString();
 	}
 
 	/* (non-Javadoc)
@@ -473,11 +531,9 @@ public class EclipseFileManager implements StandardJavaFileManager {
 				}
 			} else if (isArchive(file)) {
 				// handle archive file
-				Archive archive = getArchive(file);
-				if (archive != Archive.UNKNOWN_ARCHIVE) {
-					if (archive.contains(normalizedFileName)) {
-						return archive.getArchiveFileObject(normalizedFileName, null, this.charset);
-					}
+				ArchiveFileObject fileObject = getFileObject(file, normalizedFileName);
+				if (fileObject!=null) {
+					return fileObject;
 				}
 			}
 		}
@@ -827,7 +883,13 @@ public class EclipseFileManager implements StandardJavaFileManager {
 					}
 			}
 		} catch (IOException e) {
-			// ignore
+			String error = "Failed to handle option " + current; //$NON-NLS-1$
+			if (JRTUtil.PROPAGATE_IO_ERRORS) {
+				throw new IllegalStateException(error, e);
+			} else {
+				System.err.println(error);
+				e.printStackTrace();
+			}
 		}
 		return false;
 	}
@@ -897,7 +959,7 @@ public class EclipseFileManager implements StandardJavaFileManager {
 	}
 
 	private boolean isJrt(File f) {
-		return f.getName().toLowerCase().equals(JrtFileSystem.BOOT_MODULE);
+		return f.getName().equalsIgnoreCase(JrtFileSystem.BOOT_MODULE);
 	}
 
 	/* (non-Javadoc)
@@ -1277,10 +1339,10 @@ public class EclipseFileManager implements StandardJavaFileManager {
 		return MessageFormat.format(message, (Object[]) arguments);
 	}
 
-	private Iterable<? extends File> getFiles(final Iterable<? extends Path> paths) {
+	protected Iterable<? extends File> getFiles(final Iterable<? extends Path> paths) {
 		if (paths == null)
 			return null;
-		return () -> new Iterator<File>() {
+		return () -> new Iterator<>() {
 			Iterator<? extends Path> original = paths.iterator();
 			@Override
 			public boolean hasNext() {
@@ -1292,10 +1354,10 @@ public class EclipseFileManager implements StandardJavaFileManager {
 			}
 		};
 	}
-	private Iterable<? extends Path> getPaths(final Iterable<? extends File> files) {
+	protected Iterable<? extends Path> getPaths(final Iterable<? extends File> files) {
 		if (files == null)
 			return null;
-		return () -> new Iterator<Path>() {
+		return () -> new Iterator<>() {
 			Iterator<? extends File> original = files.iterator();
 			@Override
 			public boolean hasNext() {
@@ -1311,7 +1373,7 @@ public class EclipseFileManager implements StandardJavaFileManager {
 	private void validateFileObject(FileObject file) {
 		// FIXME: fill-up
 	}
-	private void validateModuleLocation(Location location, String modName) {
+	protected void validateModuleLocation(Location location, String modName) {
 		Objects.requireNonNull(location);
 		if (modName == null) {
 			throw new IllegalArgumentException("module must not be null"); //$NON-NLS-1$
@@ -1406,11 +1468,9 @@ public class EclipseFileManager implements StandardJavaFileManager {
 				}
 			} else if (isArchive(file)) {
 				if (fo instanceof ArchiveFileObject) {
-					Archive archive = getArchive(file);
-					if (archive != Archive.UNKNOWN_ARCHIVE) {
-						if (archive.contains(((ArchiveFileObject) fo ).entryName)) {
-							return true;
-						}
+					Boolean contains = containsFileObject(file, ((ArchiveFileObject) fo).entryName);
+					if (contains != null) {
+						return contains;
 					}
 				}
 			}

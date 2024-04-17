@@ -21,7 +21,7 @@ import org.eclipse.jdt.core.compiler.CharOperation;
 @SuppressWarnings("rawtypes")
 public class ProblemReferenceBinding extends ReferenceBinding {
 	ReferenceBinding closestMatch;
-	private int problemReason;
+	private final int problemReason;
 
 // NOTE: must only answer the subset of the name related to the problem
 
@@ -124,7 +124,7 @@ public char[] sourceName() {
 
 @Override
 public String toString() {
-	StringBuffer buffer = new StringBuffer(10);
+	StringBuilder buffer = new StringBuilder(10);
 	buffer.append("ProblemType:[compoundName="); //$NON-NLS-1$
 	buffer.append(this.compoundName == null ? "<null>" : new String(CharOperation.concatWith(this.compoundName,'.'))); //$NON-NLS-1$
 	buffer.append("][problemID=").append(problemReasonString(this.problemReason)); //$NON-NLS-1$

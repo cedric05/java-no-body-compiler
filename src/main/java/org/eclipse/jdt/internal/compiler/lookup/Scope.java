@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2021 IBM Corporation and others.
+ * Copyright (c) 2000, 2023 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -115,7 +115,8 @@ public abstract class Scope {
 	public static final int MORE_GENERIC = 1;
 
 	public int kind;
-	public Scope parent;
+	public final Scope parent;
+	public final CompilationUnitScope compilationUnitScope;
 	private Map<String, Supplier<ReferenceBinding>> commonTypeBindings = null;
 
 	private static class NullDefaultRange {
@@ -155,6 +156,7 @@ public abstract class Scope {
 		this.kind = kind;
 		this.parent = parent;
 		this.commonTypeBindings = null;
+		this.compilationUnitScope = (CompilationUnitScope) (parent == null ? this : parent.compilationUnitScope());
 	}
 
 	/* Answer an int describing the relationship between the given types.
@@ -173,7 +175,7 @@ public abstract class Scope {
 
 	/**
 	 * Returns a type where either all variables or specific ones got discarded.
-	 * e.g. List<E> (discarding <E extends Enum<E>) will return:  List<? extends Enum<?>>
+	 * e.g. {@code List<E> (discarding <E extends Enum<E>)} will return: {@code List<? extends Enum<?>>}
 	 */
 	public static TypeBinding convertEliminatingTypeVariables(TypeBinding originalType, ReferenceBinding genericType, int rank, Set eliminatedVariables) {
 		if ((originalType.tagBits & TagBits.HasTypeVariable) != 0) {
@@ -754,14 +756,9 @@ public abstract class Scope {
 	}
 
 	public final CompilationUnitScope compilationUnitScope() {
-		Scope lastScope = null;
-		Scope scope = this;
-		do {
-			lastScope = scope;
-			scope = scope.parent;
-		} while (scope != null);
-		return (CompilationUnitScope) lastScope;
+		return this.compilationUnitScope;
 	}
+
 	public ModuleBinding module() {
 		return environment().module;
 	}
@@ -871,9 +868,12 @@ public abstract class Scope {
 			if (CompilerOptions.tolerateIllegalAmbiguousVarargsInvocation && compilerOptions.complianceLevel < ClassFileConstants.JDK1_7)
 				tiebreakingVarargsMethods = false;
 		}
+
+
 		if ((parameterCompatibilityLevel(method, arguments, tiebreakingVarargsMethods)) > NOT_COMPATIBLE) {
-			if ((method.tagBits & TagBits.AnnotationPolymorphicSignature) != 0) {
-				// generate polymorphic method
+			if (method.hasPolymorphicSignature(this)) {
+				// generate polymorphic method and set polymorphic tagbits as well
+				method.tagBits |= TagBits.AnnotationPolymorphicSignature;
 				return this.environment().createPolymorphicMethod(method, arguments, this);
 			}
 			return method;
@@ -891,8 +891,6 @@ public abstract class Scope {
 
 	/**
 	 * Connect type variable supertypes, and returns true if no problem was detected
-	 * @param typeParameters
-	 * @param checkForErasedCandidateCollisions
 	 */
 	protected boolean connectTypeVariables(TypeParameter[] typeParameters, boolean checkForErasedCandidateCollisions) {
 		/* https://bugs.eclipse.org/bugs/show_bug.cgi?id=305259 - We used to not bother with connecting
@@ -988,8 +986,8 @@ public abstract class Scope {
 				nextBound: for (int j = 0, boundLength = boundRefs.length; j < boundLength; j++) {
 					typeRef = boundRefs[j];
 					superType = this.kind == METHOD_SCOPE
-						? typeRef.resolveType((BlockScope)this, false)
-						: typeRef.resolveType((ClassScope)this);
+						? typeRef.resolveType((BlockScope)this, false, Binding.DefaultLocationTypeBound)
+						: typeRef.resolveType((ClassScope)this, Binding.DefaultLocationTypeBound);
 					if (superType == null) {
 						typeVariable.tagBits |= TagBits.HierarchyHasProblems;
 						continue nextBound;
@@ -1220,10 +1218,7 @@ public abstract class Scope {
 	}
 
 	public final LookupEnvironment environment() {
-		Scope scope, unitScope = this;
-		while ((scope = unitScope.parent) != null)
-			unitScope = scope;
-		return ((CompilationUnitScope) unitScope).environment;
+		return this.compilationUnitScope.environment;
 	}
 
 	/* Abstract method lookup (since maybe missing default abstract methods). "Default abstract methods" are methods that used to be emitted into
@@ -1243,7 +1238,7 @@ public abstract class Scope {
 		int startFoundSize = found.size;
 		final boolean sourceLevel18 = this.compilerOptions().sourceLevel >= ClassFileConstants.JDK1_8;
 		ReferenceBinding currentType = classHierarchyStart;
-		List<TypeBinding> visitedTypes = new ArrayList<TypeBinding>();
+		List<TypeBinding> visitedTypes = new ArrayList<>();
 		while (currentType != null) {
 			findMethodInSuperInterfaces(currentType, selector, found, visitedTypes, invocationSite);
 			currentType = currentType.superclass();
@@ -1363,8 +1358,9 @@ public abstract class Scope {
 				if (invocationSite.genericTypeArguments() != null) {
 					// computeCompatibleMethod(..) will return a PolymorphicMethodBinding if needed
 					exactMethod = computeCompatibleMethod(exactMethod, argumentTypes, invocationSite);
-				} else if ((exactMethod.tagBits & TagBits.AnnotationPolymorphicSignature) != 0) {
-					// generate polymorphic method
+				} else if (exactMethod.hasPolymorphicSignature(this)) {
+					// generate polymorphic method and set polymorphic tagbits as well
+					exactMethod.tagBits |= TagBits.AnnotationPolymorphicSignature;
 					return this.environment().createPolymorphicMethod(exactMethod, argumentTypes, this);
 				}
 				return exactMethod;
@@ -1437,13 +1433,11 @@ public abstract class Scope {
 
 		currentType.initializeForStaticImports();
 		FieldBinding field = currentType.getField(fieldName, needResolve);
-		// https://bugs.eclipse.org/bugs/show_bug.cgi?id=316456
-		boolean insideTypeAnnotations = this instanceof MethodScope && ((MethodScope) this).insideTypeAnnotation;
 		if (field != null) {
 			if (invisibleFieldsOk) {
 				return field;
 			}
-			if (invocationSite == null || insideTypeAnnotations
+			if (invocationSite == null
 				? field.canBeSeenBy(getCurrentPackage())
 				: field.canBeSeenBy(currentType, invocationSite, this))
 					return field;
@@ -1661,7 +1655,7 @@ public abstract class Scope {
 		if (method != null && method.isValidBinding() && method.isVarargs()) {
 			TypeBinding elementType = method.parameters[method.parameters.length - 1].leafComponentType();
 			if (elementType instanceof ReferenceBinding) {
-				if (!((ReferenceBinding) elementType).canBeSeenBy(this)) {
+				if (!((ReferenceBinding) elementType).erasure().canBeSeenBy(this)) {
 					return new ProblemMethodBinding(method, method.selector, invocationSite.genericTypeArguments(), ProblemReasons.VarargsElementTypeNotVisible);
 				}
 			}
@@ -1675,7 +1669,7 @@ public abstract class Scope {
 		ObjectVector found = new ObjectVector(3);
 		CompilationUnitScope unitScope = compilationUnitScope();
 		unitScope.recordTypeReferences(argumentTypes);
-		List<TypeBinding> visitedTypes = new ArrayList<TypeBinding>();
+		List<TypeBinding> visitedTypes = new ArrayList<>();
 		if (receiverTypeIsInterface) {
 			unitScope.recordTypeReference(receiverType);
 			MethodBinding[] receiverMethods = receiverType.getMethods(selector, argumentTypes.length);
@@ -2238,7 +2232,12 @@ public abstract class Scope {
 										if (importReference != null && needResolve) {
 											importReference.bits |= ASTNode.Used;
 										}
-										invocationSite.setActualReceiverType(foundField.declaringClass);
+										TypeBinding importedType = this.getType(importBinding.compoundName, importBinding.compoundName.length-1);
+										if (importedType instanceof ReferenceBinding && importBinding.isValidBinding()) {
+											invocationSite.setActualReceiverType((ReferenceBinding) importedType);
+										} else {
+											invocationSite.setActualReceiverType(foundField.declaringClass);
+										}
 										if (foundField.isValidBinding()) {
 											return foundField;
 										}
@@ -2250,12 +2249,14 @@ public abstract class Scope {
 						}
 						// check on demand imports
 						boolean foundInImport = false;
+						ReferenceBinding sourceCodeReceiver = null;
 						for (int i = 0, length = imports.length; i < length; i++) {
 							ImportBinding importBinding = imports[i];
 							if (importBinding.isStatic() && importBinding.onDemand) {
 								Binding resolvedImport = importBinding.resolvedImport;
 								if (resolvedImport instanceof ReferenceBinding) {
-									FieldBinding temp = findField((ReferenceBinding) resolvedImport, name, invocationSite, needResolve);
+									ReferenceBinding importedReferenceBinding = (ReferenceBinding) resolvedImport;
+									FieldBinding temp = findField(importedReferenceBinding, name, invocationSite, needResolve);
 									if (temp != null) {
 										if (!temp.isValidBinding()) {
 											if (problemField == null)
@@ -2274,6 +2275,7 @@ public abstract class Scope {
 														name,
 														ProblemReasons.Ambiguous);
 											foundField = temp;
+											sourceCodeReceiver = importedReferenceBinding;
 											foundInImport = true;
 										}
 									}
@@ -2281,7 +2283,10 @@ public abstract class Scope {
 							}
 						}
 						if (foundField != null) {
-							invocationSite.setActualReceiverType(foundField.declaringClass);
+							if (sourceCodeReceiver != null)
+								invocationSite.setActualReceiverType(sourceCodeReceiver);
+							else
+								invocationSite.setActualReceiverType(foundField.declaringClass);
 							return foundField;
 						}
 					}
@@ -2522,10 +2527,7 @@ public abstract class Scope {
 	}
 
 	public final PackageBinding getCurrentPackage() {
-		Scope scope, unitScope = this;
-		while ((scope = unitScope.parent) != null)
-			unitScope = scope;
-		return ((CompilationUnitScope) unitScope).fPackage;
+		return this.compilationUnitScope.fPackage;
 	}
 
 	/**
@@ -2720,6 +2722,7 @@ public abstract class Scope {
 			scope = scope.parent;
 		}
 
+		Map<MethodBinding,ReferenceBinding> method2sourceDeclaring = new HashMap<>();
 		if (insideStaticContext && options.sourceLevel >= ClassFileConstants.JDK1_5) {
 			if (foundProblem != null) {
 				if (foundProblem.declaringClass != null && foundProblem.declaringClass.id == TypeIds.T_JavaLangObject)
@@ -2742,15 +2745,25 @@ public abstract class Scope {
 						Binding resolvedImport = importBinding.resolvedImport;
 						MethodBinding possible = null;
 						if (importBinding.onDemand) {
-							if (!skipOnDemand && resolvedImport instanceof ReferenceBinding)
+							if (!skipOnDemand && resolvedImport instanceof ReferenceBinding) {
 								// answers closest approximation, may not check argumentTypes or visibility
-								possible = findMethod((ReferenceBinding) resolvedImport, selector, argumentTypes, invocationSite, true);
+								ReferenceBinding resolvedImportReferenceBinding = (ReferenceBinding) resolvedImport;
+								possible = findMethod(resolvedImportReferenceBinding, selector, argumentTypes, invocationSite, true);
+								if (possible != null && possible.isValidBinding())
+									method2sourceDeclaring.put(possible, resolvedImportReferenceBinding);
+							}
 						} else {
 							if (resolvedImport instanceof MethodBinding) {
 								MethodBinding staticMethod = (MethodBinding) resolvedImport;
-								if (CharOperation.equals(staticMethod.selector, selector))
+								if (CharOperation.equals(staticMethod.selector, selector)) {
 									// answers closest approximation, may not check argumentTypes or visibility
 									possible = findMethod(staticMethod.declaringClass, selector, argumentTypes, invocationSite, true);
+									if (possible != null && possible.isValidBinding()) {
+										TypeBinding importedType = getType(importBinding.compoundName, importBinding.compoundName.length-1);
+										if (importedType instanceof ReferenceBinding && importedType.isValidBinding())
+											method2sourceDeclaring.put(possible, (ReferenceBinding) importedType);
+									}
+								}
 							} else if (resolvedImport instanceof FieldBinding) {
 								// check to see if there are also methods with the same name
 								FieldBinding staticField = (FieldBinding) resolvedImport;
@@ -2772,6 +2785,7 @@ public abstract class Scope {
 								MethodBinding compatibleMethod = computeCompatibleMethod(possible, argumentTypes, invocationSite);
 								if (compatibleMethod != null) {
 									if (compatibleMethod.isValidBinding()) {
+										method2sourceDeclaring.put(compatibleMethod, method2sourceDeclaring.get(possible));
 										if (compatibleMethod.canBeSeenBy(unitScope.fPackage)) {
 											if (!skipOnDemand && !importBinding.onDemand) {
 												visible = null; // forget previous matches from on demand imports
@@ -2812,7 +2826,12 @@ public abstract class Scope {
 		}
 
 		if (foundMethod != null) {
-			invocationSite.setActualReceiverType(foundMethod.declaringClass);
+			ReferenceBinding sourceDeclaring = method2sourceDeclaring.get(foundMethod);
+			if (sourceDeclaring != null) {
+				invocationSite.setActualReceiverType(sourceDeclaring);
+			} else {
+				invocationSite.setActualReceiverType(foundMethod.declaringClass);
+			}
 			return foundMethod;
 		}
 		if (foundProblem != null)
@@ -2923,6 +2942,36 @@ public abstract class Scope {
 		unitScope.recordQualifiedReference(TypeConstants.JAVA_LANG_RUNTIME_OBJECTMETHODS);
 		return unitScope.environment.getResolvedJavaBaseType(TypeConstants.JAVA_LANG_RUNTIME_OBJECTMETHODS, this);
 	}
+	public final ReferenceBinding getJavaLangRuntimeSwitchBootstraps() {
+		CompilationUnitScope unitScope = compilationUnitScope();
+		unitScope.recordQualifiedReference(TypeConstants.JAVA_LANG_RUNTIME_SWITCHBOOTSTRAPS);
+		return unitScope.environment.getResolvedJavaBaseType(TypeConstants.JAVA_LANG_RUNTIME_SWITCHBOOTSTRAPS, this);
+	}
+	public final ReferenceBinding getJavaLangInvokeConstantBootstraps() {
+		CompilationUnitScope unitScope = compilationUnitScope();
+		unitScope.recordQualifiedReference(TypeConstants.JAVA_LANG_INVOKE_CONSTANTBOOTSTRAP);
+		return unitScope.environment.getResolvedJavaBaseType(TypeConstants.JAVA_LANG_INVOKE_CONSTANTBOOTSTRAP, this);
+	}
+	public final ReferenceBinding getJavaLangEnumDesc() {
+		CompilationUnitScope unitScope = compilationUnitScope();
+		unitScope.recordQualifiedReference(TypeConstants.JAVA_LANG_ENUM_ENUMDESC);
+		return unitScope.environment.getResolvedJavaBaseType(TypeConstants.JAVA_LANG_ENUM_ENUMDESC, this);
+	}
+	public final ReferenceBinding getJavaLangClassDesc() {
+		CompilationUnitScope unitScope = compilationUnitScope();
+		unitScope.recordQualifiedReference(TypeConstants.JAVA_LANG_CONSTANT_CLASSDESC);
+		return unitScope.environment.getResolvedJavaBaseType(TypeConstants.JAVA_LANG_CONSTANT_CLASSDESC, this);
+	}
+	public final ReferenceBinding getJavaLangInvokeStringConcatFactory() {
+		CompilationUnitScope unitScope = compilationUnitScope();
+		unitScope.recordQualifiedReference(TypeConstants.JAVA_LANG_INVOKE_STRING_CONCAT_FACTORY);
+		return unitScope.environment.getResolvedJavaBaseType(TypeConstants.JAVA_LANG_INVOKE_STRING_CONCAT_FACTORY, this);
+	}
+	public final ReferenceBinding getJavaLangRuntimeTemplateRuntimeBootstraps() {
+		CompilationUnitScope unitScope = compilationUnitScope();
+		unitScope.recordQualifiedReference(TypeConstants.JAVA_LANG_RUNTIME_TEMPLATERUNTIME);
+		return unitScope.environment.getResolvedJavaBaseType(TypeConstants.JAVA_LANG_RUNTIME_TEMPLATERUNTIME, this);
+	}
 	public final ReferenceBinding getJavaLangInvokeLambdaMetafactory() {
 		CompilationUnitScope unitScope = compilationUnitScope();
 		unitScope.recordQualifiedReference(TypeConstants.JAVA_LANG_INVOKE_LAMBDAMETAFACTORY);
@@ -2940,6 +2989,18 @@ public abstract class Scope {
 		unitScope.recordQualifiedReference(TypeConstants.JAVA_LANG_INVOKE_METHODHANDLES);
 		ReferenceBinding outerType = unitScope.environment.getResolvedJavaBaseType(TypeConstants.JAVA_LANG_INVOKE_METHODHANDLES, this);
 		return findDirectMemberType("Lookup".toCharArray(), outerType); //$NON-NLS-1$
+	}
+
+	public final ReferenceBinding getJavaLangInvokeMethodHandle() {
+		CompilationUnitScope unitScope = compilationUnitScope();
+		unitScope.recordQualifiedReference(TypeConstants.JAVA_LANG_INVOKE_METHODHANDLE);
+		return unitScope.environment.getResolvedJavaBaseType(TypeConstants.JAVA_LANG_INVOKE_METHODHANDLE, this);
+	}
+
+	public final ReferenceBinding getJavaLangInvokeVarHandle() {
+		CompilationUnitScope unitScope = compilationUnitScope();
+		unitScope.recordQualifiedReference(TypeConstants.JAVA_LANG_INVOKE_VARHANDLE);
+		return unitScope.environment.getResolvedJavaBaseType(TypeConstants.JAVA_LANG_INVOKE_VARHANDLE, this);
 	}
 
 	public final ReferenceBinding getJavaLangInteger() {
@@ -2990,6 +3051,18 @@ public abstract class Scope {
 		unitScope.recordQualifiedReference(TypeConstants.JAVA_LANG_STRINGBUILDER);
 		return unitScope.environment.getResolvedJavaBaseType(TypeConstants.JAVA_LANG_STRINGBUILDER, this);
 	}
+
+	public TypeBinding getJavaLangStringTemplate() {
+		CompilationUnitScope unitScope = compilationUnitScope();
+		unitScope.recordQualifiedReference(TypeConstants.JAVA_LANG_STRINGTEMPLATE);
+		return unitScope.environment.getResolvedJavaBaseType(TypeConstants.JAVA_LANG_STRINGTEMPLATE, this);
+	}
+
+	public final ReferenceBinding getJavaLangStringTemplateProcessor() {
+		CompilationUnitScope unitScope = compilationUnitScope();
+		unitScope.recordQualifiedReference(TypeConstants.JAVA_LANG_STRINGTEMPLATE_PROCESSOR);
+		return unitScope.environment.getResolvedJavaBaseType(TypeConstants.JAVA_LANG_STRINGTEMPLATE_PROCESSOR, this);
+	}
 	public final ReferenceBinding getJavaLangThrowable() {
 		CompilationUnitScope unitScope = compilationUnitScope();
 		unitScope.recordQualifiedReference(TypeConstants.JAVA_LANG_THROWABLE);
@@ -3017,6 +3090,25 @@ public abstract class Scope {
 	*/
 	public final ReferenceBinding getMemberType(char[] typeName, ReferenceBinding enclosingType) {
 		ReferenceBinding memberType = findMemberType(typeName, enclosingType);
+		if (enclosingType.isHierarchyBeingConnected() && memberType == null && this.kind == CLASS_SCOPE) {
+			ClassScope scope = (ClassScope) this;
+			TypeReference superTypeReference = scope.referenceContext.superclass;
+			if (superTypeReference != null && superTypeReference.resolvedType instanceof ReferenceBinding) {
+				memberType = findMemberType(typeName, (ReferenceBinding) superTypeReference.resolvedType);
+			}
+			if (memberType == null && scope.referenceContext.superInterfaces != null
+					&& scope.referenceContext.superInterfaces.length > 0) {
+				TypeReference[] interfaces = scope.referenceContext.superInterfaces;
+				for (TypeReference reference : interfaces) {
+					if (reference != null && reference.resolvedType instanceof ReferenceBinding) {
+						memberType = findMemberType(typeName, (ReferenceBinding) reference.resolvedType);
+						if (memberType != null) {
+							break;
+						}
+					}
+				}
+			}
+		}
 		if (memberType != null) return memberType;
 		char[][] compoundName = new char[][] { typeName };
 		return new ProblemReferenceBinding(compoundName, null, ProblemReasons.NotFound);
@@ -3307,9 +3399,7 @@ public abstract class Scope {
 		boolean insideClassContext = false;
 		boolean insideTypeAnnotation = false;
 		if ((mask & Binding.TYPE) == 0) {
-			Scope next = scope;
-			while ((next = scope.parent) != null)
-				scope = next;
+			scope = this.compilationUnitScope;
 		} else {
 			boolean inheritedHasPrecedence = compilerOptions().complianceLevel >= ClassFileConstants.JDK1_4;
 			done : while (true) { // done when a COMPILATION_UNIT_SCOPE is found
@@ -3808,13 +3898,8 @@ public abstract class Scope {
 		while ((type = enclosingType.enclosingType()) != null)
 			enclosingType = type;
 
-		// find the compilation unit scope
-		Scope scope, unitScope = this;
-		while ((scope = unitScope.parent) != null)
-			unitScope = scope;
-
 		// test that the enclosingType is not part of the compilation unit
-		SourceTypeBinding[] topLevelTypes = ((CompilationUnitScope) unitScope).topLevelTypes;
+		SourceTypeBinding[] topLevelTypes = this.compilationUnitScope.topLevelTypes;
 		for (int i = topLevelTypes.length; --i >= 0;)
 			if (TypeBinding.equalsEquals(topLevelTypes[i], enclosingType.original()))
 				return true;
@@ -4093,7 +4178,7 @@ public abstract class Scope {
 	// 15.12.2
 	/**
 	 * Returns VoidBinding if types have no intersection (e.g. 2 unrelated interfaces), or null if
-	 * no common supertype (e.g. List<String> and List<Exception>), or the intersection type if possible
+	 * no common supertype (e.g. {@code List<String>} and {@code List<Exception>}), or the intersection type if possible
 	 */
 	public TypeBinding lowerUpperBound(TypeBinding[] types) {
 		int typeLength = types.length;
@@ -4635,6 +4720,16 @@ public abstract class Scope {
 				return new ProblemMethodBinding(visible[0], visible[0].selector, visible[0].parameters, ProblemReasons.Ambiguous);
 			} else if (count == 1) {
 				MethodBinding candidate = moreSpecific[0];
+				if (visibleSize > 1 && candidate instanceof ParameterizedMethodBinding && invocationSite instanceof MessageSend) {
+					for (TypeBinding typeBinding : argumentTypes) {
+						if (!typeBinding.isProperType(true)) {
+							InferenceContext18 ic18 = ((MessageSend) invocationSite).getInferenceContext((ParameterizedMethodBinding) candidate);
+							if (ic18 != null)
+								ic18.prematureOverloadResolution = true;
+							break;
+						}
+					}
+				}
 				if (candidate != null)
 					compilationUnitScope().recordTypeReferences(candidate.thrownExceptions);
 				return candidate;
@@ -5093,13 +5188,11 @@ public abstract class Scope {
 		return NOT_COMPATIBLE;
 	}
 
+	/** See also the contract of {@link ProblemReporter#close()}. */
 	public abstract ProblemReporter problemReporter();
 
 	public final CompilationUnitDeclaration referenceCompilationUnit() {
-		Scope scope, unitScope = this;
-		while ((scope = unitScope.parent) != null)
-			unitScope = scope;
-		return ((CompilationUnitScope) unitScope).referenceContext;
+		return this.compilationUnitScope.referenceContext;
 	}
 
 	/**
@@ -5147,12 +5240,6 @@ public abstract class Scope {
 			}
 		} while ((current = current.parent) != null);
 		return null;
-	}
-
-	public boolean deferCheck(Runnable check) {
-		if (this.parent != null)
-			return this.parent.deferCheck(check); // only ClassScope potentially records this
-		return false;
 	}
 
 	public void deferBoundCheck(TypeReference typeRef) {
@@ -5382,7 +5469,6 @@ public abstract class Scope {
 	/**
 	 * Check whether the given null default is redundant at the given position inside this scope.
 	 * @param nullBits locally defined nullness default, see Binding.NullnessDefaultMASK
-	 * @param sourceStart
 	 * @return enclosing binding that already has a matching NonNullByDefault annotation,
 	 * 		or the special binding {@link #NOT_REDUNDANT}, indicating that a different enclosing nullness default was found,
 	 * 		or null to indicate that no enclosing nullness default was found.
@@ -5402,6 +5488,15 @@ public abstract class Scope {
 			return (nonNullByDefaultValue & location) != 0;
 		}
 		return this.parent.hasDefaultNullnessFor(location, sourceStart);
+	}
+
+	public boolean hasDefaultNullnessForType(TypeBinding type, int location, int sourceStart) {
+		TypeBinding enclosingType = enclosingReceiverType();
+		if (enclosingType != null && (enclosingType.original().tagBits & TagBits.EndHierarchyCheck) == 0)
+			return false;
+		if (environment().usesNullTypeAnnotations() && type != null && !type.acceptsNonNullDefault())
+			return false;
+		return hasDefaultNullnessFor(location, sourceStart);
 	}
 
 	/*
@@ -5459,17 +5554,26 @@ public abstract class Scope {
 		while (methodScope != null) {
 			while (methodScope != null && methodScope.referenceContext instanceof LambdaExpression) {
 				LambdaExpression lambda = (LambdaExpression) methodScope.referenceContext;
-				if (!typeVariableAccess && !lambda.scope.isStatic)
+				SourceTypeBinding lambdaEnclosingType = methodScope.classScope().referenceContext.binding;
+				if (methodScope.isConstructorCall) {
+					ReferenceBinding tmp = lambdaEnclosingType;
+					while ((tmp = tmp.enclosingType()) != null) {
+						if (!TypeBinding.equalsEquals(enclosingType, tmp)) continue;
+						lambda.mapSyntheticEnclosingTypes.computeIfAbsent((SourceTypeBinding) enclosingType, lambda::addSyntheticArgument);
+						lambda.hasOuterClassMemberReference = true; // ref to Outer class members allowed - interpreting 8.8.7.1
+						break;
+					}
+				}
+				if (!typeVariableAccess && !lambda.scope.isStatic && !lambda.hasOuterClassMemberReference)
 					lambda.shouldCaptureInstance = true;  // lambda can still be static, only when `this' is touched (implicitly or otherwise) it cannot be.
 				methodScope = methodScope.enclosingMethodScope();
 			}
 			if (methodScope != null) {
-				if (methodScope.referenceContext instanceof MethodDeclaration) {
-					MethodDeclaration methodDeclaration = (MethodDeclaration) methodScope.referenceContext;
-					if (methodDeclaration.binding == enclosingMethod)
-						break;
-					methodDeclaration.bits &= ~ASTNode.CanBeStatic;
-				}
+				AbstractMethodDeclaration methodDecl = methodScope.referenceMethod();
+				if (methodDecl != null && methodDecl.binding == enclosingMethod)
+					break;
+				if (methodDecl instanceof MethodDeclaration)
+					methodDecl.bits &= ~ASTNode.CanBeStatic;
 				ClassScope enclosingClassScope = methodScope.enclosingClassScope();
 				if (enclosingClassScope != null) {
 					TypeDeclaration type = enclosingClassScope.referenceContext;

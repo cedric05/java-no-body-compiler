@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2021 IBM Corporation and others.
+ * Copyright (c) 2000, 2023 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -55,6 +55,8 @@ import org.eclipse.jdt.internal.compiler.ast.Annotation;
 import org.eclipse.jdt.internal.compiler.ast.AnnotationMethodDeclaration;
 import org.eclipse.jdt.internal.compiler.ast.Argument;
 import org.eclipse.jdt.internal.compiler.ast.ArrayInitializer;
+import org.eclipse.jdt.internal.compiler.ast.CaseStatement;
+import org.eclipse.jdt.internal.compiler.ast.CaseStatement.ResolvedCase;
 import org.eclipse.jdt.internal.compiler.ast.ClassLiteralAccess;
 import org.eclipse.jdt.internal.compiler.ast.CompilationUnitDeclaration;
 import org.eclipse.jdt.internal.compiler.ast.ExportsStatement;
@@ -67,6 +69,7 @@ import org.eclipse.jdt.internal.compiler.ast.MemberValuePair;
 import org.eclipse.jdt.internal.compiler.ast.MethodDeclaration;
 import org.eclipse.jdt.internal.compiler.ast.ModuleDeclaration;
 import org.eclipse.jdt.internal.compiler.ast.NormalAnnotation;
+import org.eclipse.jdt.internal.compiler.ast.NullLiteral;
 import org.eclipse.jdt.internal.compiler.ast.OpensStatement;
 import org.eclipse.jdt.internal.compiler.ast.QualifiedNameReference;
 import org.eclipse.jdt.internal.compiler.ast.Receiver;
@@ -75,6 +78,8 @@ import org.eclipse.jdt.internal.compiler.ast.ReferenceExpression;
 import org.eclipse.jdt.internal.compiler.ast.RequiresStatement;
 import org.eclipse.jdt.internal.compiler.ast.SingleMemberAnnotation;
 import org.eclipse.jdt.internal.compiler.ast.SingleNameReference;
+import org.eclipse.jdt.internal.compiler.ast.StringLiteral;
+import org.eclipse.jdt.internal.compiler.ast.StringTemplate;
 import org.eclipse.jdt.internal.compiler.ast.SwitchStatement;
 import org.eclipse.jdt.internal.compiler.ast.TypeDeclaration;
 import org.eclipse.jdt.internal.compiler.ast.TypeParameter;
@@ -120,6 +125,7 @@ import org.eclipse.jdt.internal.compiler.lookup.TypeIds;
 import org.eclipse.jdt.internal.compiler.lookup.TypeVariableBinding;
 import org.eclipse.jdt.internal.compiler.problem.AbortMethod;
 import org.eclipse.jdt.internal.compiler.problem.AbortType;
+import org.eclipse.jdt.internal.compiler.problem.ProblemReporter;
 import org.eclipse.jdt.internal.compiler.problem.ProblemSeverities;
 import org.eclipse.jdt.internal.compiler.problem.ShouldNotImplement;
 import org.eclipse.jdt.internal.compiler.util.Messages;
@@ -164,7 +170,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 	public int headerOffset;
 	public Map<TypeBinding, Boolean> innerClassesBindings;
 	public Set<SourceTypeBinding> nestMembers;
-	public List<ASTNode> bootstrapMethods = null;
+	public List<Object> bootstrapMethods = null;
 	public int methodCount;
 	public int methodCountOffset;
 	// pool managment
@@ -189,8 +195,17 @@ public class ClassFile implements TypeConstants, TypeIds {
 	public static final String ALTMETAFACTORY_STRING = new String(ConstantPool.ALTMETAFACTORY);
 	public static final String METAFACTORY_STRING = new String(ConstantPool.METAFACTORY);
 	public static final String BOOTSTRAP_STRING = new String(ConstantPool.BOOTSTRAP);
-	public static final String[] BOOTSTRAP_METHODS = {ALTMETAFACTORY_STRING, METAFACTORY_STRING, BOOTSTRAP_STRING};
-
+	public static final String TYPESWITCH_STRING = new String(ConstantPool.TYPESWITCH);
+	public static final String ENUMSWITCH_STRING = new String(ConstantPool.ENUMSWITCH);
+	public static final String CONCAT_CONSTANTS = new String(ConstantPool.ConcatWithConstants);
+	public static final String INVOKE_STRING = new String(ConstantPool.INVOKE_METHOD_METHOD_NAME);
+	public static final String ENUMDESC_OF = "EnumDesc.of"; //$NON-NLS-1$
+	public static final String CLASSDESC = "ClassDesc"; //$NON-NLS-1$
+	public static final String CLASSDESC_OF = "ClassDesc.of"; //$NON-NLS-1$
+	public static final String PROCESS_STRING = "process"; //$NON-NLS-1$
+	public static final String NEW_STRING_TEMPLATE = "newStringTemplate"; //$NON-NLS-1$
+	public static final String[] BOOTSTRAP_METHODS = { ALTMETAFACTORY_STRING, METAFACTORY_STRING, BOOTSTRAP_STRING,
+			TYPESWITCH_STRING, ENUMSWITCH_STRING, CONCAT_CONSTANTS, INVOKE_STRING, ENUMDESC_OF, CLASSDESC, CLASSDESC_OF, PROCESS_STRING, NEW_STRING_TEMPLATE};
 	/**
 	 * INTERNAL USE-ONLY
 	 * Request the creation of a ClassFile compatible representation of a problematic type
@@ -414,7 +429,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 					else if (this.referenceBinding.isAnnotationType())
 						targetMask = TagBits.AnnotationForType | TagBits.AnnotationForAnnotationType;
 					else
-						targetMask = TagBits.AnnotationForType | TagBits.AnnotationForTypeUse;
+						targetMask = TagBits.AnnotationForType | TagBits.AnnotationForTypeUse; // 9.7.4 ... applicable to type declarations or in type contexts
 					attributesNumber += generateRuntimeAnnotations(annotations, targetMask);
 				}
 			}
@@ -435,7 +450,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 		if (this.bootstrapMethods != null && !this.bootstrapMethods.isEmpty()) {
 			attributesNumber += generateBootstrapMethods(this.bootstrapMethods);
 		}
-		if (this.targetJDK >= ClassFileConstants.JDK16) {
+		if (this.targetJDK >= ClassFileConstants.JDK17) {
 			// add record attributes
 			attributesNumber += generatePermittedTypeAttributes();
 		}
@@ -606,7 +621,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 						int size = allTypeAnnotationContexts.size();
 						attributesNumber = completeRuntimeTypeAnnotations(attributesNumber,
 								null,
-								(node) -> size > 0,
+								node -> size > 0,
 								() -> allTypeAnnotationContexts);
 					}
 				} finally {
@@ -650,7 +665,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 			if ((this.produceAttributes & ClassFileConstants.ATTR_TYPE_ANNOTATION) != 0) {
 				List<AnnotationContext> allTypeAnnotationContexts = new ArrayList<>();
 				if (annotations != null && (recordComponent.bits & ASTNode.HasTypeAnnotations) != 0) {
-					recordComponent.getAllAnnotationContexts(AnnotationTargetTypeConstants.FIELD, allTypeAnnotationContexts);
+					recordComponent.getAllAnnotationContexts(AnnotationTargetTypeConstants.RECORD_COMPONENT, allTypeAnnotationContexts);
 				}
 				TypeReference recordComponentType = recordComponent.type;
 				if (recordComponentType != null && ((recordComponentType.bits & ASTNode.HasTypeAnnotations) != 0)) {
@@ -659,7 +674,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 				int size = allTypeAnnotationContexts.size();
 				attributesNumber = completeRuntimeTypeAnnotations(attributesNumber,
 																	null,
-																	(node) -> size > 0,
+																	node -> size > 0,
 																	() -> allTypeAnnotationContexts);
 
 			}
@@ -797,7 +812,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 
 		int codeAttributeOffset = this.contentsOffset;
 		generateCodeAttributeHeader();
-		StringBuffer buffer = new StringBuffer(25);
+		StringBuilder buffer = new StringBuilder(25);
 		buffer.append("\t"  + problem.getMessage() + "\n" ); //$NON-NLS-1$ //$NON-NLS-2$
 		buffer.insert(0, Messages.compilation_unresolvedProblem);
 		String problemString = buffer.toString();
@@ -839,7 +854,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 		int problemLine = 0;
 		if (problems != null) {
 			int max = problems.length;
-			StringBuffer buffer = new StringBuffer(25);
+			StringBuilder buffer = new StringBuilder(25);
 			int count = 0;
 			for (int i = 0; i < max; i++) {
 				CategorizedProblem problem = problems[i];
@@ -905,7 +920,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 		int problemLine = 0;
 		if (problems != null) {
 			int max = problems.length;
-			StringBuffer buffer = new StringBuffer(25);
+			StringBuilder buffer = new StringBuilder(25);
 			int count = 0;
 			for (int i = 0; i < max; i++) {
 				CategorizedProblem problem = problems[i];
@@ -989,7 +1004,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 		int problemLine = 0;
 		if (problems != null) {
 			int max = problems.length;
-			StringBuffer buffer = new StringBuffer(25);
+			StringBuilder buffer = new StringBuilder(25);
 			int count = 0;
 			for (int i = 0; i < max; i++) {
 				CategorizedProblem problem = problems[i];
@@ -1748,7 +1763,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 		int size = allTypeAnnotationContexts.size();
 		attributesNumber = completeRuntimeTypeAnnotations(attributesNumber,
 															null,
-															(node) -> size > 0,
+															node -> size > 0,
 															() -> allTypeAnnotationContexts);
 		return attributesNumber;
 	}
@@ -2026,9 +2041,6 @@ public class ClassFile implements TypeConstants, TypeIds {
 	}
 
 
-	/**
-	 *
-	 */
 	public void completeCodeAttributeForMissingAbstractProblemMethod(
 			MethodBinding binding,
 			int codeAttributeOffset,
@@ -2265,9 +2277,10 @@ public class ClassFile implements TypeConstants, TypeIds {
 				if (exceptionLabel != null) {
 					int iRange = 0, maxRange = exceptionLabel.getCount();
 					if ((maxRange & 1) != 0) {
-						this.referenceBinding.scope.problemReporter().abortDueToInternalError(
+						ProblemReporter problemReporter = this.referenceBinding.scope.problemReporter();
+						problemReporter.abortDueToInternalError(
 								Messages.bind(Messages.abort_invalidExceptionAttribute, new String(binding.selector),
-										this.referenceBinding.scope.problemReporter().referenceContext));
+										problemReporter.referenceContext));
 					}
 					while  (iRange < maxRange) {
 						int start = exceptionLabel.ranges[iRange++]; // even ranges are start positions
@@ -2426,6 +2439,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 				}
 				Annotation[] annotations = methodDeclaration.annotations;
 				if (annotations != null && !methodDeclaration.isClinit() && (methodDeclaration.isConstructor() || binding.returnType.id != T_void)) {
+					// at source level type annotations have not been moved from declaration to type use position, collect them now:
 					methodDeclaration.getAllAnnotationContexts(AnnotationTargetTypeConstants.METHOD_RETURN, allTypeAnnotationContexts);
 				}
 				if (!methodDeclaration.isConstructor() && !methodDeclaration.isClinit() && binding.returnType.id != T_void) {
@@ -2461,7 +2475,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 			int size = allTypeAnnotationContexts.size();
 			attributesNumber = completeRuntimeTypeAnnotations(attributesNumber,
 											null,
-											(node) -> size > 0,
+											node -> size > 0,
 											() -> allTypeAnnotationContexts);
 		}
 		if ((this.produceAttributes & ClassFileConstants.ATTR_METHOD_PARAMETERS) != 0 ||
@@ -3296,9 +3310,6 @@ public class ClassFile implements TypeConstants, TypeIds {
 			}
 		}
 	}
-	/**
-	 * @param attributeOffset
-	 */
 	private void generateElementValue(int attributeOffset, Expression defaultValue, Constant constant, TypeBinding binding) {
 		if (this.contentsOffset + 3 >= this.contents.length) {
 			resizeContents(3);
@@ -3597,7 +3608,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 		}
 		return fPtr;
 	}
-	private int generateBootstrapMethods(List<ASTNode> bootStrapMethodsList) {
+	private int generateBootstrapMethods(List<Object> bootStrapMethodsList) {
 		/* See JVM spec 4.7.21
 		   The BootstrapMethods attribute has the following format:
 		   BootstrapMethods_attribute {
@@ -3645,6 +3656,21 @@ public class ClassFile implements TypeConstants, TypeIds {
 				localContentsOffset = addBootStrapLambdaEntry(localContentsOffset, (FunctionalExpression) o, fPtr);
 			} else if (o instanceof TypeDeclaration) {
 				localContentsOffset = addBootStrapRecordEntry(localContentsOffset, (TypeDeclaration) o, fPtr);
+			} else if (o instanceof SwitchStatement) {
+				SwitchStatement stmt = (SwitchStatement) o;
+				if (stmt.expression.resolvedType.isEnum()) {
+					localContentsOffset = addBootStrapEnumSwitchEntry(localContentsOffset, stmt, fPtr);
+				} else {
+					localContentsOffset = addBootStrapTypeSwitchEntry(localContentsOffset, stmt, fPtr);
+				}
+			} else if (o instanceof String) {
+				localContentsOffset = addBootStrapStringConcatEntry(localContentsOffset, (String) o, fPtr);
+			} else if (o instanceof ResolvedCase) {
+				localContentsOffset = addBootStrapTypeCaseConstantEntry(localContentsOffset, (ResolvedCase) o, fPtr);
+			} else if (o instanceof TypeBinding) {
+				localContentsOffset = addClassDescBootstrap(localContentsOffset, (TypeBinding) o, fPtr);
+			} else if (o instanceof StringTemplate template) {
+				localContentsOffset = addBootStrapTemplateRuntimeEntry(localContentsOffset, template, fPtr);
 			}
 		}
 
@@ -3814,7 +3840,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 		String names =
 			Arrays.stream(recordComponents)
 			.map(f -> new String(f.name))
-			.reduce((s1, s2) -> { return s1 + ";" + s2;}) //$NON-NLS-1$
+			.reduce((s1, s2) -> (s1 + ";" + s2)) //$NON-NLS-1$
 			.orElse(Util.EMPTY_STRING);
 		int namesIndex = this.constantPool.literalIndex(names);
 		this.contents[localContentsOffset++] = (byte) (namesIndex >> 8);
@@ -3830,6 +3856,256 @@ public class ClassFile implements TypeConstants, TypeIds {
 
 			this.contents[localContentsOffset++] = (byte) (methodHandleIndex >> 8);
 			this.contents[localContentsOffset++] = (byte) methodHandleIndex;
+		}
+		return localContentsOffset;
+	}
+	private int addBootStrapTypeCaseConstantEntry(int localContentsOffset, ResolvedCase caseConstant, Map<String, Integer> fPtr) {
+		final int contentsEntries = 10;
+		if (contentsEntries + localContentsOffset >= this.contents.length) {
+			resizeContents(contentsEntries);
+		}
+		int idx = fPtr.get(ClassFile.INVOKE_STRING);
+		if (idx == 0) {
+			ReferenceBinding constantBootstrap = this.referenceBinding.scope.getJavaLangInvokeConstantBootstraps();
+			idx = this.constantPool.literalIndexForMethodHandle(
+					ClassFileConstants.MethodHandleRefKindInvokeStatic,
+					constantBootstrap,
+					ConstantPool.INVOKE_METHOD_METHOD_NAME,
+					ConstantPool.JAVA_LANG_INVOKE_CONSTANTBOOTSTRAP_SIGNATURE,
+					false);
+			fPtr.put(ClassFile.INVOKE_STRING, idx);
+		}
+		this.contents[localContentsOffset++] = (byte) (idx >> 8);
+		this.contents[localContentsOffset++] = (byte) idx;
+
+		// u2 num_bootstrap_arguments
+		this.contents[localContentsOffset++] = 0;
+		this.contents[localContentsOffset++] = (byte) 3;
+
+		idx = fPtr.get(ClassFile.ENUMDESC_OF);
+		if (idx == 0) {
+			ReferenceBinding enumDesc = this.referenceBinding.scope.getJavaLangEnumDesc();
+			idx = this.constantPool.literalIndexForMethodHandle(
+						ClassFileConstants.MethodHandleRefKindInvokeStatic,
+						enumDesc,
+						"of".toCharArray(), //$NON-NLS-1$
+						ConstantPool.JAVA_LANG_ENUMDESC_OF_SIGNATURE,
+						false);
+			fPtr.put(ClassFile.ENUMDESC_OF, idx);
+		}
+
+		this.contents[localContentsOffset++] = (byte) (idx >> 8);
+		this.contents[localContentsOffset++] = (byte) idx;
+
+		idx = this.constantPool.literalIndexForDynamic(
+										caseConstant.classDescIdx,
+										ConstantPool.INVOKE_METHOD_METHOD_NAME,
+										ConstantPool.JAVA_LANG_CONST_CLASSDESC);
+		this.contents[localContentsOffset++] = (byte) (idx >> 8);
+		this.contents[localContentsOffset++] = (byte) idx;
+
+		idx = this.constantPool.literalIndex(caseConstant.c.stringValue());
+		this.contents[localContentsOffset++] = (byte) (idx >> 8);
+		this.contents[localContentsOffset++] = (byte) idx;
+
+		return localContentsOffset;
+	}
+	private int addClassDescBootstrap(int localContentsOffset, TypeBinding type, Map<String, Integer> fPtr) {
+		final int contentsEntries = 10;
+		int idx = fPtr.get(ClassFile.INVOKE_STRING);
+		if (contentsEntries + localContentsOffset >= this.contents.length) {
+			resizeContents(contentsEntries);
+		}
+		if (idx == 0) {
+			ReferenceBinding constantBootstrap = this.referenceBinding.scope.getJavaLangInvokeConstantBootstraps();
+			idx = this.constantPool.literalIndexForMethodHandle(
+									ClassFileConstants.MethodHandleRefKindInvokeStatic,
+									constantBootstrap,
+									ConstantPool.INVOKE_METHOD_METHOD_NAME,
+									ConstantPool.JAVA_LANG_INVOKE_CONSTANTBOOTSTRAP_SIGNATURE,
+									false);
+			fPtr.put(ClassFile.INVOKE_STRING, idx);
+		}
+		this.contents[localContentsOffset++] = (byte) (idx >> 8);
+		this.contents[localContentsOffset++] = (byte) idx;
+
+		// u2 num_bootstrap_arguments
+		this.contents[localContentsOffset++] = 0;
+		this.contents[localContentsOffset++] = (byte) 2;
+
+		idx = fPtr.get(ClassFile.CLASSDESC);
+		if (idx == 0) {
+			ReferenceBinding classDesc = this.referenceBinding.scope.getJavaLangClassDesc();
+			idx = this.constantPool.literalIndexForMethodHandle(
+					ClassFileConstants.MethodHandleRefKindInvokeStatic,
+					classDesc,
+					"of".toCharArray(),  //$NON-NLS-1$
+					ConstantPool.JAVA_LANG_CLASSDESC_OF_SIGNATURE,
+					true);
+			fPtr.put(ClassFile.CLASSDESC_OF, idx);
+		}
+
+		this.contents[localContentsOffset++] = (byte) (idx >> 8);
+		this.contents[localContentsOffset++] = (byte) idx;
+
+		ReferenceBinding refBinding = (ReferenceBinding) type;
+		idx = this.constantPool.literalIndex(CharOperation.toString(refBinding.compoundName));
+		this.contents[localContentsOffset++] = (byte) (idx >> 8);
+		this.contents[localContentsOffset++] = (byte) idx;
+
+		return localContentsOffset;
+	}
+	private int addBootStrapTypeSwitchEntry(int localContentsOffset, SwitchStatement switchStatement, Map<String, Integer> fPtr) {
+		CaseStatement.ResolvedCase[] constants = switchStatement.otherConstants;
+		int numArgs = constants.length;
+		final int contentsEntries = 10 + (numArgs * 2);
+		int indexFortypeSwitch = fPtr.get(ClassFile.TYPESWITCH_STRING);
+		if (contentsEntries + localContentsOffset >= this.contents.length) {
+			resizeContents(contentsEntries);
+		}
+		if (indexFortypeSwitch == 0) {
+			ReferenceBinding javaLangRuntimeSwitchBootstraps = this.referenceBinding.scope.getJavaLangRuntimeSwitchBootstraps();
+			indexFortypeSwitch = this.constantPool.literalIndexForMethodHandle(ClassFileConstants.MethodHandleRefKindInvokeStatic, javaLangRuntimeSwitchBootstraps,
+					ConstantPool.TYPESWITCH, ConstantPool.JAVA_LANG_RUNTIME_SWITCHBOOTSTRAPS_SWITCH_SIGNATURE, false);
+			fPtr.put(ClassFile.TYPESWITCH_STRING, indexFortypeSwitch);
+		}
+		this.contents[localContentsOffset++] = (byte) (indexFortypeSwitch >> 8);
+		this.contents[localContentsOffset++] = (byte) indexFortypeSwitch;
+
+		// u2 num_bootstrap_arguments
+		int numArgsLocation = localContentsOffset;
+		if (switchStatement.containsNull) --numArgs;
+		this.contents[numArgsLocation++] = (byte) (numArgs >> 8);
+		this.contents[numArgsLocation] = (byte) numArgs;
+		localContentsOffset += 2;
+		for (CaseStatement.ResolvedCase c : constants) {
+			if (c.isPattern()) {
+				char[] typeName = c.t.constantPoolName();
+				int typeIndex = this.constantPool.literalIndexForType(typeName);
+				this.contents[localContentsOffset++] = (byte) (typeIndex >> 8);
+				this.contents[localContentsOffset++] = (byte) typeIndex;
+			} else if (c.isQualifiedEnum()){
+				int typeIndex = this.constantPool.literalIndexForDynamic(c.enumDescIdx,
+						ConstantPool.INVOKE_METHOD_METHOD_NAME,
+						ConstantPool.JAVA_LANG_ENUM_ENUMDESC);
+				this.contents[localContentsOffset++] = (byte) (typeIndex >> 8);
+				this.contents[localContentsOffset++] = (byte) typeIndex;
+			} else if ((c.e instanceof StringLiteral)||(c.c instanceof StringConstant)) {
+				int intValIdx =
+						this.constantPool.literalIndex(c.c.stringValue());
+				this.contents[localContentsOffset++] = (byte) (intValIdx >> 8);
+				this.contents[localContentsOffset++] = (byte) intValIdx;
+			} else {
+				if (c.e instanceof NullLiteral) continue;
+				int intValIdx =
+						this.constantPool.literalIndex(c.intValue());
+				this.contents[localContentsOffset++] = (byte) (intValIdx >> 8);
+				this.contents[localContentsOffset++] = (byte) intValIdx;
+			}
+		}
+
+		return localContentsOffset;
+	}
+	private int addBootStrapEnumSwitchEntry(int localContentsOffset, SwitchStatement switchStatement, Map<String, Integer> fPtr) {
+		final int contentsEntries = 10;
+		int indexForenumSwitch = fPtr.get(ClassFile.ENUMSWITCH_STRING);
+		if (contentsEntries + localContentsOffset >= this.contents.length) {
+			resizeContents(contentsEntries);
+		}
+		if (indexForenumSwitch == 0) {
+			ReferenceBinding javaLangRuntimeSwitchBootstraps = this.referenceBinding.scope.getJavaLangRuntimeSwitchBootstraps();
+			indexForenumSwitch = this.constantPool.literalIndexForMethodHandle(ClassFileConstants.MethodHandleRefKindInvokeStatic, javaLangRuntimeSwitchBootstraps,
+					ConstantPool.ENUMSWITCH, ConstantPool.JAVA_LANG_RUNTIME_SWITCHBOOTSTRAPS_SWITCH_SIGNATURE, false);
+			fPtr.put(ClassFile.ENUMSWITCH_STRING, indexForenumSwitch);
+		}
+		this.contents[localContentsOffset++] = (byte) (indexForenumSwitch >> 8);
+		this.contents[localContentsOffset++] = (byte) indexForenumSwitch;
+
+		// u2 num_bootstrap_arguments
+		int numArgsLocation = localContentsOffset;
+		CaseStatement.ResolvedCase[] constants = switchStatement.otherConstants;
+		int numArgs = constants.length;
+		if (switchStatement.containsNull) --numArgs;
+		this.contents[numArgsLocation++] = (byte) (numArgs >> 8);
+		this.contents[numArgsLocation] = (byte) numArgs;
+		localContentsOffset += 2;
+
+		for (CaseStatement.ResolvedCase c : constants) {
+			if (c.isPattern()) {
+				char[] typeName = switchStatement.expression.resolvedType.constantPoolName();
+				int typeIndex = this.constantPool.literalIndexForType(typeName);
+				this.contents[localContentsOffset++] = (byte) (typeIndex >> 8);
+				this.contents[localContentsOffset++] = (byte) typeIndex;
+			} else {
+				if (c.e instanceof NullLiteral) continue;
+				String s = c.e instanceof QualifiedNameReference qnr ? // handle superfluously qualified enumerator.
+								new String(qnr.tokens[qnr.tokens.length-1]) : c.e.toString();
+				int intValIdx =
+						this.constantPool.literalIndex(s);
+				this.contents[localContentsOffset++] = (byte) (intValIdx >> 8);
+				this.contents[localContentsOffset++] = (byte) intValIdx;
+			}
+		}
+
+		return localContentsOffset;
+	}
+	private int addBootStrapStringConcatEntry(int localContentsOffset, String recipe, Map<String, Integer> fPtr) {
+		final int contentsEntries = 10;
+		int indexForStringConcat = fPtr.get(ClassFile.CONCAT_CONSTANTS);
+		if (contentsEntries + localContentsOffset >= this.contents.length) {
+			resizeContents(contentsEntries);
+		}
+		if (indexForStringConcat == 0) {
+			ReferenceBinding stringConcatBootstrap = this.referenceBinding.scope.getJavaLangInvokeStringConcatFactory();
+			indexForStringConcat = this.constantPool.literalIndexForMethodHandle(ClassFileConstants.MethodHandleRefKindInvokeStatic, stringConcatBootstrap,
+					ConstantPool.ConcatWithConstants, ConstantPool.JAVA_LANG_INVOKE_STRING_CONCAT_FACTORY_SIGNATURE, false);
+			fPtr.put(ClassFile.CONCAT_CONSTANTS, indexForStringConcat);
+		}
+		this.contents[localContentsOffset++] = (byte) (indexForStringConcat >> 8);
+		this.contents[localContentsOffset++] = (byte) indexForStringConcat;
+
+		// u2 num_bootstrap_arguments
+		this.contents[localContentsOffset++] = 0;
+		this.contents[localContentsOffset++] = (byte) 1;
+
+		int intValIdx =
+				this.constantPool.literalIndex(recipe);
+		this.contents[localContentsOffset++] = (byte) (intValIdx >> 8);
+		this.contents[localContentsOffset++] = (byte) intValIdx;
+
+		return localContentsOffset;
+	}
+	private int addBootStrapTemplateRuntimeEntry(int localContentsOffset, StringTemplate template, Map<String, Integer> fPtr) {
+		final int contentsEntries = 10;
+		int indexForProcess = fPtr.get(NEW_STRING_TEMPLATE);
+		if (contentsEntries + localContentsOffset >= this.contents.length) {
+			resizeContents(contentsEntries);
+		}
+		if (indexForProcess == 0) {
+			ReferenceBinding javaLangRuntimeTemplateBootstraps = this.referenceBinding.scope.getJavaLangRuntimeTemplateRuntimeBootstraps();
+			indexForProcess = this.constantPool.literalIndexForMethodHandle(ClassFileConstants.MethodHandleRefKindInvokeStatic, javaLangRuntimeTemplateBootstraps,
+					NEW_STRING_TEMPLATE.toCharArray(), ConstantPool.JAVA_LANG_RUNTIME_STRING_TEMPLATE_SIGNATURE, false);
+			fPtr.put(NEW_STRING_TEMPLATE, indexForProcess);
+		}
+		this.contents[localContentsOffset++] = (byte) (indexForProcess >> 8);
+		this.contents[localContentsOffset++] = (byte) indexForProcess;
+
+		// u2 num_bootstrap_arguments
+		int numArgsLocation = localContentsOffset;
+		StringLiteral[] fragments = template.fragments();
+		int numArgs = fragments.length;
+		this.contents[numArgsLocation++] = (byte) (numArgs >> 8);
+		this.contents[numArgsLocation] = (byte) numArgs;
+		localContentsOffset += 2;
+
+		if ((numArgs * 2) + localContentsOffset >= this.contents.length) {
+			resizeContents(numArgs * 2);
+		}
+		for (StringLiteral frag : fragments) {
+			int intValIdx =
+					this.constantPool.literalIndex(frag.constant.stringValue());
+			this.contents[localContentsOffset++] = (byte) (intValIdx >> 8);
+			this.contents[localContentsOffset++] = (byte) intValIdx;
 		}
 		return localContentsOffset;
 	}
@@ -4165,7 +4441,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 							int size = allTypeAnnotationContexts.size();
 							attributesNumber = completeRuntimeTypeAnnotations(attributesNumber,
 									null,
-									(node) -> size > 0,
+									node -> size > 0,
 									() -> allTypeAnnotationContexts);
 						}
 					}
@@ -4305,6 +4581,9 @@ public class ClassFile implements TypeConstants, TypeIds {
 		if ((methodBinding.tagBits & TagBits.ClearPrivateModifier) != 0) {
 			accessFlags &= ~ClassFileConstants.AccPrivate;
 		}
+		if (this.targetJDK >= ClassFileConstants.JDK17) {
+			accessFlags &= ~(ClassFileConstants.AccStrictfp);
+		}
 		this.contents[this.contentsOffset++] = (byte) (accessFlags >> 8);
 		this.contents[this.contentsOffset++] = (byte) accessFlags;
 		int nameIndex = this.constantPool.literalIndex(methodBinding.selector);
@@ -4348,7 +4627,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 	 * That method generates the method info header of a clinit:
 	 * The header consists in:
 	 * - the access flags (always default access + static)
-	 * - the name index of the method name (always <clinit>) inside the constant pool
+	 * - the name index of the method name (always {@code <clinit>}) inside the constant pool
 	 * - the descriptor index of the signature (always ()V) of the method inside the constant pool.
 	 */
 	public void generateMethodInfoHeaderForClinit() {
@@ -4461,7 +4740,6 @@ public class ClassFile implements TypeConstants, TypeIds {
 		return false;
 	}
 	/**
-	 * @param annotations
 	 * @param targetMask allowed targets
 	 * @return the number of attributes created while dumping the annotations in the .class file
 	 */
@@ -4477,9 +4755,9 @@ public class ClassFile implements TypeConstants, TypeIds {
 			if (annotationMask != 0 && (annotationMask & targetMask) == 0) {
 				if (!jdk16packageInfoAnnotation(annotationMask, targetMask)) continue;
 			}
-			if (annotation.isRuntimeInvisible() || annotation.isRuntimeTypeInvisible()) {
+			if (annotation.isRuntimeInvisible()) {
 				invisibleAnnotationsCounter++;
-			} else if (annotation.isRuntimeVisible() || annotation.isRuntimeTypeVisible()) {
+			} else if (annotation.isRuntimeVisible()) {
 				visibleAnnotationsCounter++;
 			}
 		}
@@ -4508,7 +4786,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 				if (annotationMask != 0 && (annotationMask & targetMask) == 0) {
 					if (!jdk16packageInfoAnnotation(annotationMask, targetMask)) continue;
 				}
-				if (annotation.isRuntimeInvisible() || annotation.isRuntimeTypeInvisible()) {
+				if (annotation.isRuntimeInvisible()) {
 					int currentAnnotationOffset = this.contentsOffset;
 					generateAnnotation(annotation, currentAnnotationOffset);
 					invisibleAnnotationsCounter--;
@@ -4556,7 +4834,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 				if (annotationMask != 0 && (annotationMask & targetMask) == 0) {
 					if (!jdk16packageInfoAnnotation(annotationMask, targetMask)) continue;
 				}
-				if (annotation.isRuntimeVisible() || annotation.isRuntimeTypeVisible()) {
+				if (annotation.isRuntimeVisible()) {
 					visibleAnnotationsCounter--;
 					int currentAnnotationOffset = this.contentsOffset;
 					generateAnnotation(annotation, currentAnnotationOffset);
@@ -4901,7 +5179,10 @@ public class ClassFile implements TypeConstants, TypeIds {
 			for (int i = 0, max = targetParameters.length, argumentsLength = arguments != null ? arguments.length : 0; i < max; i++) {
 				if (argumentsLength > i && arguments[i] != null) {
 					Argument argument = arguments[i];
-					length = writeArgumentName(argument.name, argument.binding.modifiers, length);
+					int modifiers = argument.binding.modifiers;
+					if (binding.isCompactConstructor())
+						modifiers |= ClassFileConstants.AccMandated;
+					length = writeArgumentName(argument.name, modifiers, length);
 				} else {
 					length = writeArgumentName(null, ClassFileConstants.AccSynthetic, length);
 				}
@@ -5614,7 +5895,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 		int size = allTypeAnnotationContexts.size();
 		attributesNumber = completeRuntimeTypeAnnotations(attributesNumber,
 				null,
-				(node) -> size > 0,
+				node -> size > 0,
 				() -> allTypeAnnotationContexts);
 		return attributesNumber;
 	}
@@ -5663,6 +5944,22 @@ public class ClassFile implements TypeConstants, TypeIds {
 		}
 		return this.bytes;
 	}
+
+	/**
+	 * Sets the actual bytes of the class file.
+	 *
+	 * This method is made public only to be accessible from org.eclipse.jdt.internal.core.builder.AbstractImageBuilder
+	 * during compilation post processing to store the modified byte representation of the class. Using this method for
+	 * any other purpose is discouraged and may lead to unpredictable results.
+	 *
+	 * @param newBytes
+	 *            array containing new bytes, will be stored &quot;as is&quot;, all subsequent modification on given
+	 *            array will be reflected and vice versa.
+	 */
+	public void internalSetBytes(byte[] newBytes) {
+		this.bytes = newBytes;
+	}
+
 	/**
 	 * EXTERNAL API
 	 * Answer the compound name of the class file.
@@ -6095,7 +6392,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 		}
 		if (expression instanceof ReferenceExpression) {
 			for (int i = 0; i < this.bootstrapMethods.size(); i++) {
-				ASTNode node = this.bootstrapMethods.get(i);
+				Object node = this.bootstrapMethods.get(i);
 				if (node instanceof FunctionalExpression) {
 					FunctionalExpression fexp = (FunctionalExpression) node;
 					if (fexp.binding == expression.binding
@@ -6109,6 +6406,46 @@ public class ClassFile implements TypeConstants, TypeIds {
 		return expression.bootstrapMethodNumber = this.bootstrapMethods.size() - 1;
 	}
 
+	public int recordBootstrapMethod(SwitchStatement switchStatement) {
+		if (this.bootstrapMethods == null) {
+			this.bootstrapMethods = new ArrayList<>();
+		}
+		this.bootstrapMethods.add(switchStatement);
+		return this.bootstrapMethods.size() - 1;
+	}
+	public int recordBootstrapMethod(ResolvedCase resolvedCase) {
+		if (this.bootstrapMethods == null) {
+			this.bootstrapMethods = new ArrayList<>();
+		}
+		this.bootstrapMethods.add(resolvedCase);
+		return this.bootstrapMethods.size() - 1;
+	}
+	public int recordBootstrapMethod(TypeBinding type) {
+		if (this.bootstrapMethods == null) {
+			this.bootstrapMethods = new ArrayList<>();
+		} else {
+			int idx = this.bootstrapMethods.indexOf(type);
+			if (idx != -1) {
+				return idx;
+			}
+		}
+		this.bootstrapMethods.add(type);
+		return this.bootstrapMethods.size() - 1;
+	}
+	public int recordBootstrapMethod(String expression) {
+		if (this.bootstrapMethods == null) {
+			this.bootstrapMethods = new ArrayList<>();
+		}
+		this.bootstrapMethods.add(expression);
+		return this.bootstrapMethods.size() - 1;
+	}
+	public int recordBootstrapMethod(StringTemplate template) {
+		if (this.bootstrapMethods == null) {
+			this.bootstrapMethods = new ArrayList<>();
+		}
+		this.bootstrapMethods.add(template);
+		return this.bootstrapMethods.size() - 1;
+	}
 	public void reset(/*@Nullable*/SourceTypeBinding typeBinding, CompilerOptions options) {
 		// the code stream is reinitialized for each method
 		if (typeBinding != null) {
@@ -6245,7 +6582,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 	}
 
 	private TypeBinding getTypeBinding(char[] typeConstantPoolName, Scope scope, boolean checkcast) {
-		if (typeConstantPoolName.length == 1) {
+		if (typeConstantPoolName.length == 1 && !checkcast) {
 			// base type
 			switch(typeConstantPoolName[0]) {
 				case 'Z':
@@ -6543,6 +6880,7 @@ public class ClassFile implements TypeConstants, TypeIds {
 				}
 			}
 			byte opcode = (byte) u1At(bytecodes, 0, pc);
+			inspectFrame(currentPC, frame);
 			switch (opcode) {
 				case Opcodes.OPC_nop:
 					pc++;
@@ -7524,6 +7862,10 @@ public class ClassFile implements TypeConstants, TypeIds {
 			}
 		}
 		return filterFakeFrames(realJumpTarget, frames, codeLength);
+	}
+
+	private void inspectFrame(int currentPC, StackMapFrame frame) {
+		// Plant a breakpoint at the call site to conveniently hover.
 	}
 
 	private StackMapFrame createNewFrame(int currentPC, StackMapFrame frame, boolean isClinit, MethodBinding methodBinding) {

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2020 IBM Corporation and others.
+ * Copyright (c) 2000, 2023 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -58,7 +58,6 @@ import org.eclipse.jdt.internal.compiler.classfmt.ClassFileConstants;
 import org.eclipse.jdt.internal.compiler.codegen.CodeStream;
 import org.eclipse.jdt.internal.compiler.codegen.ConstantPool;
 import org.eclipse.jdt.internal.compiler.codegen.Opcodes;
-import org.eclipse.jdt.internal.compiler.env.ICompilationUnit;
 import org.eclipse.jdt.internal.compiler.flow.FieldInitsFakingFlowContext;
 import org.eclipse.jdt.internal.compiler.flow.FlowContext;
 import org.eclipse.jdt.internal.compiler.flow.FlowInfo;
@@ -123,7 +122,6 @@ public class ReferenceExpression extends FunctionalExpression implements IPolyEx
 	private MethodBinding[] potentialMethods = Binding.NO_METHODS;
 	protected ReferenceExpression original;
 	private HashMap<TypeBinding, ReferenceExpression> copiesPerTargetType;
-	public char[] text; // source representation of the expression.
 	private HashMap<ParameterizedGenericMethodBinding, InferenceContext18> inferenceContexts;
 
 	// the scanner used when creating this expression, may be a RecoveryScanner (with proper RecoveryScannerData),
@@ -145,16 +143,20 @@ public class ReferenceExpression extends FunctionalExpression implements IPolyEx
 		this.sourceEnd = sourceEndPosition;
 	}
 
+	/**
+	 * @return a virgin copy of `this' by reparsing the stashed textual form.
+	 */
 	private ReferenceExpression copy() {
 		final Parser parser = new Parser(this.enclosingScope.problemReporter(), false);
-		final ICompilationUnit compilationUnit = this.compilationResult.getCompilationUnit();
-		final char[] source = compilationUnit != null ? compilationUnit.getContents() : this.text;
+		char [] source = new char [this.sourceEnd+1];
+		System.arraycopy(this.text, 0, source, this.sourceStart, this.sourceEnd - this.sourceStart + 1);
 		parser.scanner = this.scanner;
-		ReferenceExpression copy =  (ReferenceExpression) parser.parseExpression(source, compilationUnit != null ? this.sourceStart : 0, this.sourceEnd - this.sourceStart + 1,
+		ReferenceExpression copy =  (ReferenceExpression) parser.parseExpression(source, this.sourceStart, this.sourceEnd - this.sourceStart + 1,
 										this.enclosingScope.referenceCompilationUnit(), false /* record line separators */);
 		copy.original = this;
 		copy.sourceStart = this.sourceStart;
 		copy.sourceEnd = this.sourceEnd;
+		copy.text = this.text;
 		return copy;
 	}
 
@@ -208,6 +210,7 @@ public class ReferenceExpression extends FunctionalExpression implements IPolyEx
 			argv[i] = new SingleNameReference(name, 0);
 		}
 		boolean generateSecretReceiverVariable = shouldGenerateSecretReceiverVariable();
+		LocalVariableBinding[] patternVariablesInScope = NO_VARIABLES;
 		if (isMethodReference()) {
 			if (generateSecretReceiverVariable) {
 				this.lhs.generateCode(currentScope, codeStream, true);
@@ -217,6 +220,13 @@ public class ReferenceExpression extends FunctionalExpression implements IPolyEx
 			MessageSend message = new MessageSend();
 			message.selector = this.selector;
 			Expression receiver = generateSecretReceiverVariable ? new SingleNameReference(this.receiverVariable.name, 0) : copy.lhs;
+			if (this.lhs instanceof NameReference nr
+					&& nr.binding instanceof LocalVariableBinding receiverLocal
+					&& receiverLocal.isValidBinding()
+					&& (receiverLocal.modifiers & ExtraCompilerModifiers.AccOutOfFlowScope) != 0) {
+				// what was in scope during initial resolve must be in scope during resolve of synthetic AST, too:
+				patternVariablesInScope = new LocalVariableBinding[] { receiverLocal };
+			}
 			message.receiver = this.receiverPrecedesParameters ?
 					new SingleNameReference(CharOperation.append(ImplicitArgName, Integer.toString(0).toCharArray()), 0) : receiver;
 			message.typeArguments = copy.typeArguments;
@@ -257,10 +267,10 @@ public class ReferenceExpression extends FunctionalExpression implements IPolyEx
 		BlockScope lambdaScope = this.receiverVariable != null ? this.receiverVariable.declaringScope : currentScope;
 		IErrorHandlingPolicy oldPolicy = lambdaScope.problemReporter().switchErrorHandlingPolicy(silentErrorHandlingPolicy);
 		try {
-			implicitLambda.resolveType(lambdaScope, true);
+			implicitLambda.resolveTypeWithBindings(patternVariablesInScope, lambdaScope, true);
 			implicitLambda.analyseCode(lambdaScope,
 					new FieldInitsFakingFlowContext(null, this, Binding.NO_EXCEPTIONS, null, lambdaScope, FlowInfo.DEAD_END),
-					UnconditionalFlowInfo.fakeInitializedFlowInfo(lambdaScope.outerMostMethodScope().analysisIndex, lambdaScope.referenceType().maxFieldCount));
+					UnconditionalFlowInfo.fakeInitializedFlowInfo(implicitLambda.firstLocalLocal, lambdaScope.referenceType().maxFieldCount));
 		} finally {
 			lambdaScope.problemReporter().switchErrorHandlingPolicy(oldPolicy);
 		}
@@ -277,7 +287,7 @@ public class ReferenceExpression extends FunctionalExpression implements IPolyEx
 	private boolean shouldGenerateImplicitLambda(BlockScope currentScope) {
 		// these cases are either too complicated, impossible to handle or result in significant code duplication
 		return (this.binding.isVarargs() ||
-				(isConstructorReference() && this.receiverType.syntheticOuterLocalVariables() != null && this.shouldCaptureInstance) ||
+				(isConstructorReference() && (this.receiverType.syntheticOuterLocalVariables() != null || this.shouldCaptureInstance)) ||
 				this.requiresBridges() || // bridges.
 				!isDirectCodeGenPossible());
 		// To fix: We should opt for direct code generation wherever possible.
@@ -298,15 +308,27 @@ public class ReferenceExpression extends FunctionalExpression implements IPolyEx
 				}
 			}
 			TypeBinding[] descriptorParams = this.descriptor.parameters;
-			TypeBinding[] origParams = this.binding.original().parameters;
-			TypeBinding[] origDescParams = this.descriptor.original().parameters;
-			int offset = this.receiverPrecedesParameters ? 1 : 0;
-			for (int i = 0; i < descriptorParams.length - offset; i++) {
-				TypeBinding descType = descriptorParams[i + offset];
-				TypeBinding origDescType = origDescParams[i + offset];
-				if (descType.isIntersectionType18() ||
-						(descType.isTypeVariable() && ((TypeVariableBinding) descType).boundsCount() > 1)) {
-					return CharOperation.equals(origDescType.signature(), origParams[i].signature());
+			if (descriptorParams.length > 0) {
+				TypeBinding[] origParams = this.binding.original().parameters;
+				TypeBinding[] origDescParams = this.descriptor.original().parameters;
+				for (int i = 0; i < descriptorParams.length; i++) {
+					TypeBinding descType = descriptorParams[i];
+					TypeBinding origDescType = origDescParams[i];
+					if (descType.isIntersectionType18()
+							|| (descType.isTypeVariable() && ((TypeVariableBinding) descType).boundsCount() > 1)) {
+						boolean varargs = this.binding.original().isVarargs();
+						TypeBinding origParam = this.receiverPrecedesParameters
+								? i == 0 ? this.receiverType : InferenceContext18.getParameter(origParams, i-1, varargs)
+								: InferenceContext18.getParameter(origParams, i, varargs);
+						if (!CharOperation.equals(origDescType.signature(), origParam.signature()))
+							return false;
+					}
+				}
+			} else if (this.haveReceiver) {
+				 if (this.receiverType.isIntersectionType18()
+						 || (this.receiverType.isTypeVariable() && ((TypeVariableBinding) this.receiverType).boundsCount() > 1)) {
+					 if (!CharOperation.equals(this.binding.original().declaringClass.signature(), this.receiverType.signature()))
+						return false;
 				}
 			}
 		}
@@ -341,7 +363,7 @@ public class ReferenceExpression extends FunctionalExpression implements IPolyEx
 			}
 		}
 		int pc = codeStream.position;
-		StringBuffer buffer = new StringBuffer();
+		StringBuilder buffer = new StringBuilder();
 		int argumentsSize = 0;
 		buffer.append('(');
 		if (this.haveReceiver) {
@@ -464,7 +486,7 @@ public class ReferenceExpression extends FunctionalExpression implements IPolyEx
 		if (this.binding.isPrivate()) {
 			if (TypeBinding.notEquals(enclosingSourceType, codegenBinding.declaringClass)){
 				this.syntheticAccessor = ((SourceTypeBinding)codegenBinding.declaringClass).addSyntheticMethod(codegenBinding, false /* not super access */);
-				currentScope.problemReporter().needToEmulateMethodAccess(codegenBinding, this);
+				currentScope.problemReporter().checkSyntheticAccessor(codegenBinding, this);
 			}
 			return;
 		}
@@ -510,7 +532,8 @@ public class ReferenceExpression extends FunctionalExpression implements IPolyEx
 				}
 			}
 		}
-		if (currentScope.compilerOptions().isAnyEnabled(IrritantSet.UNLIKELY_ARGUMENT_TYPE) && this.binding.isValidBinding()
+		CompilerOptions compilerOptions = currentScope.compilerOptions();
+		if (compilerOptions.isAnyEnabled(IrritantSet.UNLIKELY_ARGUMENT_TYPE) && this.binding.isValidBinding()
 				&& this.binding != null && this.binding.parameters != null) {
 			if (this.binding.parameters.length == 1
 					&& this.descriptor.parameters.length == (this.receiverPrecedesParameters ? 2 : 1)
@@ -537,9 +560,9 @@ public class ReferenceExpression extends FunctionalExpression implements IPolyEx
 			}
 		}
 
-		if (currentScope.compilerOptions().analyseResourceLeaks) {
+		if (compilerOptions.analyseResourceLeaks) {
 			if (this.haveReceiver && CharOperation.equals(this.selector, TypeConstants.CLOSE)) {
-				FakedTrackingVariable trackingVariable = FakedTrackingVariable.getCloseTrackingVariable(this.lhs, flowInfo, flowContext);
+				FakedTrackingVariable trackingVariable = FakedTrackingVariable.getCloseTrackingVariable(this.lhs, flowInfo, flowContext, compilerOptions.isAnnotationBasedResourceAnalysisEnabled);
 				if (trackingVariable != null) { // null happens if target is not a local variable or not an AutoCloseable
 					trackingVariable.markClosedInNestedMethod(); // there is a close()-call, but we don't know if it will be invoked
 				}
@@ -788,6 +811,7 @@ public class ReferenceExpression extends FunctionalExpression implements IPolyEx
         	}
         } else {
         	this.binding = null;
+        	this.exactMethodBinding = null;
         	this.bits &= ~ASTNode.DepthMASK;
         }
 
@@ -884,8 +908,7 @@ public class ReferenceExpression extends FunctionalExpression implements IPolyEx
 
 	        		TypeBinding descriptorParameter = this.descriptor.parameters[0];
 	    			if((descriptorParameter.tagBits & TagBits.AnnotationNullable) != 0) { // Note: normal dereferencing of 'unchecked' values is not reported, either
-		    			final TypeBinding receiver = scope.environment().createAnnotatedType(this.binding.declaringClass,
-								new AnnotationBinding[] { scope.environment().getNonNullAnnotation() });
+		    			final TypeBinding receiver = scope.environment().createNonNullAnnotatedType(this.binding.declaringClass);
     					scope.problemReporter().referenceExpressionArgumentNullityMismatch(this, receiver, descriptorParameter, this.descriptor, -1, NullAnnotationMatching.NULL_ANNOTATIONS_MISMATCH);
 	    			}
 	        	}
@@ -978,7 +1001,7 @@ public class ReferenceExpression extends FunctionalExpression implements IPolyEx
 			copy.resolveType(this.enclosingScope);
 
 			if (this.copiesPerTargetType == null)
-				this.copiesPerTargetType = new HashMap<TypeBinding, ReferenceExpression>();
+				this.copiesPerTargetType = new HashMap<>();
 			this.copiesPerTargetType.put(targetType, copy);
 
 			return copy;
@@ -989,7 +1012,7 @@ public class ReferenceExpression extends FunctionalExpression implements IPolyEx
 
 	public void registerInferenceContext(ParameterizedGenericMethodBinding method, InferenceContext18 context) {
 		if (this.inferenceContexts == null)
-			this.inferenceContexts = new HashMap<ParameterizedGenericMethodBinding, InferenceContext18>();
+			this.inferenceContexts = new HashMap<>();
 		this.inferenceContexts.put(method, context);
 	}
 
@@ -1083,7 +1106,7 @@ public class ReferenceExpression extends FunctionalExpression implements IPolyEx
 	}
 
 	@Override
-	public StringBuffer printExpression(int tab, StringBuffer output) {
+	public StringBuilder printExpression(int tab, StringBuilder output) {
 
 		this.lhs.print(0, output);
 		output.append("::"); //$NON-NLS-1$
@@ -1255,8 +1278,11 @@ public class ReferenceExpression extends FunctionalExpression implements IPolyEx
 		ReferenceExpression copy = cachedResolvedCopy(targetType);
 		if (copy == null) {
 			return contextHasSyntaxError(); // in case of syntax error avoid secondary errors
+		} else if (copy.resolvedType != null && copy.resolvedType.isValidBinding() && copy.binding != null && copy.binding.isValidBinding()) {
+			return true;
 		} else {
-			return copy.resolvedType != null && copy.resolvedType.isValidBinding() && copy.binding != null && copy.binding.isValidBinding();
+			boolean notPertinentToApplicability = targetType instanceof ParameterizedTypeBinding && !isPertinentToApplicability(targetType, null); // not mentioned in JLS (see prior art in LE.internalIsCompatibleWith()
+			return notPertinentToApplicability;
 		}
 	}
 

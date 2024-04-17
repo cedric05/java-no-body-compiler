@@ -48,7 +48,7 @@ public class RecordComponentBinding extends VariableBinding {
 	 */
 	@Override
 	public char[] computeUniqueKey(boolean isLeaf) {
-		StringBuffer buffer = new StringBuffer();
+		StringBuilder buffer = new StringBuilder();
 		buffer.append(this.declaringRecord.computeUniqueKey(false/*not a leaf*/));
 		// variable name
 		buffer.append('#');
@@ -60,8 +60,9 @@ public class RecordComponentBinding extends VariableBinding {
 		return uniqueKey;
 	}
 
-	/**
+	/**<pre>{@code
 	 * X<T> t   -->  LX<TT;>;
+	 *}</pre>
 	 */
 	public char[] genericSignature() {
 	    if ((this.modifiers & ExtraCompilerModifiers.AccGenericSignature) == 0) return null;

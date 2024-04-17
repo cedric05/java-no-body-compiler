@@ -22,7 +22,7 @@ import org.eclipse.jdt.internal.compiler.util.Util;
 public class BinaryTypeFormatter {
 
 	public static String annotationToString(IBinaryAnnotation annotation) {
-		StringBuffer buffer = new StringBuffer();
+		StringBuilder buffer = new StringBuilder();
 		buffer.append('@');
 		buffer.append(annotation.getTypeName());
 		IBinaryElementValuePair[] valuePairs = annotation.getElementValuePairs();
@@ -40,7 +40,7 @@ public class BinaryTypeFormatter {
 	}
 
 	public static String annotationToString(IBinaryTypeAnnotation typeAnnotation) {
-		StringBuffer buffer = new StringBuffer();
+		StringBuilder buffer = new StringBuilder();
 		buffer.append(typeAnnotation.getAnnotation());
 		buffer.append(' ');
 		// Not fully decoding it here, just including all the information in the string
@@ -75,12 +75,12 @@ public class BinaryTypeFormatter {
 	}
 
 	public static String methodToString(IBinaryMethod method) {
-		StringBuffer result = new StringBuffer();
+		StringBuilder result = new StringBuilder();
 		methodToStringContent(result, method);
 		return result.toString();
 	}
 
-	public static void methodToStringContent(StringBuffer buffer, IBinaryMethod method) {
+	public static void methodToStringContent(StringBuilder buffer, IBinaryMethod method) {
 		int modifiers = method.getModifiers();
 		char[] desc = method.getGenericSignature();
 		if (desc == null)

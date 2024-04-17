@@ -40,6 +40,7 @@ import org.eclipse.jdt.internal.compiler.ast.NullAnnotationMatching;
 import org.eclipse.jdt.internal.compiler.ast.Reference;
 import org.eclipse.jdt.internal.compiler.ast.SingleNameReference;
 import org.eclipse.jdt.internal.compiler.ast.SubRoutineStatement;
+import org.eclipse.jdt.internal.compiler.ast.SwitchExpression;
 import org.eclipse.jdt.internal.compiler.ast.ThrowStatement;
 import org.eclipse.jdt.internal.compiler.ast.TryStatement;
 import org.eclipse.jdt.internal.compiler.ast.TypeDeclaration;
@@ -48,6 +49,7 @@ import org.eclipse.jdt.internal.compiler.codegen.BranchLabel;
 import org.eclipse.jdt.internal.compiler.lookup.Binding;
 import org.eclipse.jdt.internal.compiler.lookup.BlockScope;
 import org.eclipse.jdt.internal.compiler.lookup.CatchParameterBinding;
+import org.eclipse.jdt.internal.compiler.lookup.FieldBinding;
 import org.eclipse.jdt.internal.compiler.lookup.LocalVariableBinding;
 import org.eclipse.jdt.internal.compiler.lookup.ReferenceBinding;
 import org.eclipse.jdt.internal.compiler.lookup.Scope;
@@ -65,6 +67,7 @@ public class FlowContext implements TypeConstants {
 
 	// preempt marks looping contexts
 	public final static FlowContext NotContinuableContext = new FlowContext(null, null, true);
+	public final static FlowContext NonLocalGotoThroughSwitchContext = new FlowContext(null, null, true);
 	public ASTNode associatedNode;
 	public FlowContext parent;
 	public FlowInfo initsOnFinally;
@@ -173,6 +176,25 @@ public void recordNullCheckedFieldReference(Reference reference, int timeToLive)
 		this.nullCheckedFieldReferences[len] = reference;
 		this.timesToLiveForNullCheckInfo[len] = timeToLive;
 	}
+}
+
+public FieldBinding[] nullCheckedFields() {
+	if (this.nullCheckedFieldReferences == null)
+		return Binding.NO_FIELDS;
+	int len = this.nullCheckedFieldReferences.length;
+	// insert into first empty slot:
+	int count = 0;
+	for (int i=0; i<len; i++) {
+		if (this.nullCheckedFieldReferences[i] != null)
+			count++;
+	}
+	FieldBinding[] result = new FieldBinding[count];
+	count = 0;
+	for (int i=0; i<len; i++) {
+		if (this.nullCheckedFieldReferences[i] != null)
+			result[count++] = this.nullCheckedFieldReferences[i].fieldBinding();
+	}
+	return result;
 }
 
 /** If a null checked field has been recorded recently, increase its time to live. */
@@ -544,6 +566,8 @@ public FlowInfo getInitsForFinalBlankInitializationCheck(TypeBinding declaringTy
 public FlowContext getTargetContextForBreakLabel(char[] labelName) {
 	FlowContext current = this, lastNonReturningSubRoutine = null;
 	while (current != null) {
+		if (current.associatedNode instanceof SwitchExpression)
+			return NonLocalGotoThroughSwitchContext;
 		if (current.isNonReturningContext()) {
 			lastNonReturningSubRoutine = current;
 		}
@@ -570,6 +594,8 @@ public FlowContext getTargetContextForContinueLabel(char[] labelName) {
 	FlowContext lastNonReturningSubRoutine = null;
 
 	while (current != null) {
+		if (current.associatedNode instanceof SwitchExpression)
+			return NonLocalGotoThroughSwitchContext;
 		if (current.isNonReturningContext()) {
 			lastNonReturningSubRoutine = current;
 		} else {
@@ -604,6 +630,8 @@ public FlowContext getTargetContextForContinueLabel(char[] labelName) {
 public FlowContext getTargetContextForDefaultBreak() {
 	FlowContext current = this, lastNonReturningSubRoutine = null;
 	while (current != null) {
+		if (current.associatedNode instanceof SwitchExpression)
+			return NonLocalGotoThroughSwitchContext;
 		if (current.isNonReturningContext()) {
 			lastNonReturningSubRoutine = current;
 		}
@@ -617,15 +645,15 @@ public FlowContext getTargetContextForDefaultBreak() {
 	return null;
 }
 /*
- * lookup a default yield through switch expression locations
+ * lookup a yield target ...
  */
-public FlowContext getTargetContextForDefaultYield() {
+public FlowContext getTargetContextForYield(boolean requireExpression) {
 	FlowContext current = this, lastNonReturningSubRoutine = null;
 	while (current != null) {
 		if (current.isNonReturningContext()) {
 			lastNonReturningSubRoutine = current;
 		}
-		if (current.isBreakable() && current.labelName() == null && ((SwitchFlowContext) current).isExpression){
+		if (current.isBreakable() && current.labelName() == null && (!requireExpression || ((SwitchFlowContext) current).isExpression)) {
 			if (lastNonReturningSubRoutine == null) return current;
 			return lastNonReturningSubRoutine;
 		}
@@ -641,6 +669,8 @@ public FlowContext getTargetContextForDefaultYield() {
 public FlowContext getTargetContextForDefaultContinue() {
 	FlowContext current = this, lastNonReturningSubRoutine = null;
 	while (current != null) {
+		if (current.associatedNode instanceof SwitchExpression)
+			return NonLocalGotoThroughSwitchContext;
 		if (current.isNonReturningContext()) {
 			lastNonReturningSubRoutine = current;
 		}
@@ -1031,7 +1061,7 @@ public SubRoutineStatement subroutine() {
 
 @Override
 public String toString() {
-	StringBuffer buffer = new StringBuffer();
+	StringBuilder buffer = new StringBuilder();
 	FlowContext current = this;
 	int parentsCount = 0;
 	while ((current = current.parent) != null) {

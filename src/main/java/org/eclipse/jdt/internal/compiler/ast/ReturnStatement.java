@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2021 IBM Corporation and others.
+ * Copyright (c) 2000, 2024 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -56,7 +56,7 @@ public class ReturnStatement extends Statement {
 	public SubRoutineStatement[] subroutines;
 	public LocalVariableBinding saveValueVariable;
 	public int initStateIndex = -1;
-	private boolean implicitReturn;
+	private final boolean implicitReturn;
 
 public ReturnStatement(Expression expression, int sourceStart, int sourceEnd) {
 	this(expression, sourceStart, sourceEnd, false);
@@ -92,15 +92,26 @@ public FlowInfo analyseCode(BlockScope currentScope, FlowContext flowContext, Fl
 		if (flowInfo.reachMode() == FlowInfo.REACHABLE && currentScope.compilerOptions().isAnnotationBasedNullAnalysisEnabled)
 			checkAgainstNullAnnotation(currentScope, flowContext, flowInfo, this.expression);
 		if (currentScope.compilerOptions().analyseResourceLeaks) {
-			FakedTrackingVariable trackingVariable = FakedTrackingVariable.getCloseTrackingVariable(this.expression, flowInfo, flowContext);
+			boolean returnWithoutOwning = false;
+			boolean useOwningAnnotations = currentScope.compilerOptions().isAnnotationBasedResourceAnalysisEnabled;
+			FakedTrackingVariable trackingVariable = FakedTrackingVariable.getCloseTrackingVariable(this.expression, flowInfo, flowContext, useOwningAnnotations);
 			if (trackingVariable != null) {
-				if (methodScope != trackingVariable.methodScope)
+				long owningTagBits = 0;
+				boolean delegatingToCaller = true;
+				if (useOwningAnnotations) {
+					owningTagBits = methodScope.referenceMethodBinding().tagBits & TagBits.AnnotationOwningMASK;
+					returnWithoutOwning = owningTagBits == 0;
+					delegatingToCaller = (owningTagBits & TagBits.AnnotationNotOwning) == 0;
+				}
+				if (methodScope != trackingVariable.methodScope && delegatingToCaller)
 					trackingVariable.markClosedInNestedMethod();
-				// by returning the method passes the responsibility to the caller:
-				flowInfo = FakedTrackingVariable.markPassedToOutside(currentScope, this.expression, flowInfo, flowContext, true);
+				if (delegatingToCaller) {
+					// by returning the method passes the responsibility to the caller:
+					flowInfo = FakedTrackingVariable.markPassedToOutside(currentScope, this.expression, flowInfo, flowContext, true);
+				}
 			}
 			// don't wait till after this statement, because then flowInfo would be DEAD_END & thus cannot serve nullStatus any more:
-			FakedTrackingVariable.cleanUpUnassigned(currentScope, this.expression, flowInfo);
+			FakedTrackingVariable.cleanUpUnassigned(currentScope, this.expression, flowInfo, returnWithoutOwning);
 		}
 	}
 	this.initStateIndex =
@@ -152,6 +163,9 @@ public FlowInfo analyseCode(BlockScope currentScope, FlowContext flowContext, Fl
 			}
 		} else if (traversedContext instanceof InitializationFlowContext) {
 				currentScope.problemReporter().cannotReturnInInitializer(this);
+				return FlowInfo.DEAD_END;
+		} else if (traversedContext.associatedNode instanceof SwitchExpression) {
+				currentScope.problemReporter().switchExpressionsReturnWithinSwitchExpression(this);
 				return FlowInfo.DEAD_END;
 		}
 	} while ((traversedContext = traversedContext.getLocalParent()) != null);
@@ -248,7 +262,6 @@ public void generateCode(BlockScope currentScope, CodeStream codeStream) {
 
 /**
  * Dump the suitable return bytecode for a return statement
- *
  */
 public void generateReturnBytecode(CodeStream codeStream) {
 	codeStream.generateReturnBytecode(this.expression);
@@ -279,7 +292,7 @@ public void prepareSaveValueLocation(TryStatement targetTryStatement){
 }
 
 @Override
-public StringBuffer printStatement(int tab, StringBuffer output){
+public StringBuilder printStatement(int tab, StringBuilder output){
 	printIndent(tab, output).append("return "); //$NON-NLS-1$
 	if (this.expression != null )
 		this.expression.printExpression(0, output) ;
@@ -346,7 +359,7 @@ public void resolve(BlockScope scope) {
 	if (methodType == null)
 		return;
 
-	if (methodType.isProperType(true) && lambda != null) {
+	if (lambda != null && methodType.isProperType(true)) {
 		// ensure that type conversions don't leak a preliminary local type:
 		if (lambda.updateLocalTypes())
 			methodType = lambda.expectedResultType();

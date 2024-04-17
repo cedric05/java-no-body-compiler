@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2016 IBM Corporation and others.
+ * Copyright (c) 2000, 2023 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -117,10 +117,16 @@ public final class Messages {
 	public static String constant_cannotCastedInto;
 	public static String constant_cannotConvertedTo;
 
+	public static String switch_expression;
 	public static String text_block;
 	public static String pattern_matching_instanceof;
 	public static String records;
 	public static String sealed_types;
+	public static String pattern_matching_switch;
+	public static String record_patterns;
+	public static String unnamed_patterns_and_vars;
+	public static String unnamed_classes_and_instance_main_methods;
+	public static String string_templates;
 
 	static {
 		initializeMessages(BUNDLE_NAME, Messages.class);
@@ -230,22 +236,20 @@ public final class Messages {
 		final String[] variants = buildVariants(bundleName);
 		// search the dirs in reverse order so the cascading defaults is set correctly
 		for (int i = variants.length; --i >= 0;) {
-			InputStream input = (loader == null)
-				? ClassLoader.getSystemResourceAsStream(variants[i])
-				: loader.getResourceAsStream(variants[i]);
-			if (input == null) continue;
-			try {
+			try (InputStream input = createInputStream(loader, variants[i])) {
+				if (input == null) {
+					continue;
+				}
 				final MessagesProperties properties = new MessagesProperties(fields, bundleName);
 				properties.load(input);
 			} catch (IOException e) {
 				// ignore
-			} finally {
-				try {
-					input.close();
-				} catch (IOException e) {
-					// ignore
-				}
 			}
 		}
+	}
+
+	private static InputStream createInputStream(final ClassLoader loader, String variant) {
+		return (loader == null) ? ClassLoader.getSystemResourceAsStream(variant)
+				: loader.getResourceAsStream(variant);
 	}
 }

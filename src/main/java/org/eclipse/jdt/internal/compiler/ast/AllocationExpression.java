@@ -91,6 +91,11 @@ public class AllocationExpression extends Expression implements IPolyExpression,
 	public boolean argsContainCast;
 	public TypeBinding[] argumentTypes = Binding.NO_PARAMETERS;
 	public boolean argumentsHaveErrors = false;
+	/**
+	 * This flag avoids "Redundant specification of type arguments" if the target type was inferred in an outer context,
+	 * possibly based on the provided type arguments of this allocation:
+	 */
+	public boolean expectedTypeWasInferred;
 
 @Override
 public FlowInfo analyseCode(BlockScope currentScope, FlowContext flowContext, FlowInfo flowInfo) {
@@ -104,15 +109,16 @@ public FlowInfo analyseCode(BlockScope currentScope, FlowContext flowContext, Fl
 				&& this.resolvedType instanceof ReferenceBinding
 				&& ((ReferenceBinding)this.resolvedType).hasTypeBit(TypeIds.BitWrapperCloseable);
 		for (int i = 0, count = this.arguments.length; i < count; i++) {
+			Expression argument = this.arguments[i];
 			flowInfo =
-				this.arguments[i]
+				argument
 					.analyseCode(currentScope, flowContext, flowInfo)
 					.unconditionalInits();
 			// if argument is an AutoCloseable insert info that it *may* be closed (by the target method, i.e.)
 			if (analyseResources && !hasResourceWrapperType) { // allocation of wrapped closeables is analyzed specially
-				flowInfo = FakedTrackingVariable.markPassedToOutside(currentScope, this.arguments[i], flowInfo, flowContext, false);
+				flowInfo = handleResourcePassedToInvocation(currentScope, this.binding, argument, i, flowContext, flowInfo);
 			}
-			this.arguments[i].checkNPEbyUnboxing(currentScope, flowContext, flowInfo);
+			argument.checkNPEbyUnboxing(currentScope, flowContext, flowInfo);
 		}
 		analyseArguments(currentScope, flowContext, flowInfo, this.binding, this.arguments);
 	}
@@ -134,7 +140,7 @@ public FlowInfo analyseCode(BlockScope currentScope, FlowContext flowContext, Fl
 
 	// after having analysed exceptions above start tracking newly allocated resource:
 	if (currentScope.compilerOptions().analyseResourceLeaks && FakedTrackingVariable.isAnyCloseable(this.resolvedType))
-		FakedTrackingVariable.analyseCloseableAllocation(currentScope, flowInfo, this);
+		FakedTrackingVariable.analyseCloseableAllocation(currentScope, flowInfo, flowContext, this);
 
 	ReferenceBinding declaringClass = this.binding.declaringClass;
 	MethodScope methodScope = currentScope.methodScope();
@@ -313,7 +319,7 @@ public void manageSyntheticAccessIfNecessary(BlockScope currentScope, FlowInfo f
 }
 
 @Override
-public StringBuffer printExpression(int indent, StringBuffer output) {
+public StringBuilder printExpression(int indent, StringBuilder output) {
 	if (this.type != null) { // type null for enum constant initializations
 		output.append("new "); //$NON-NLS-1$
 	}
@@ -523,7 +529,7 @@ public TypeBinding resolveType(BlockScope scope) {
 				for (int i = 0; i < this.typeArguments.length; i++)
 					this.typeArguments[i].checkNullConstraints(scope, (ParameterizedGenericMethodBinding) this.binding, typeVariables, i);
 			}
-			this.resolvedType = scope.environment().createAnnotatedType(this.resolvedType, new AnnotationBinding[] {scope.environment().getNonNullAnnotation()});
+			this.resolvedType = scope.environment().createNonNullAnnotatedType(this.resolvedType);
 		}
 	}
 	if (compilerOptions.sourceLevel >= ClassFileConstants.JDK1_8 &&
@@ -589,16 +595,20 @@ public MethodBinding inferConstructorOfElidedParameterizedType(final Scope scope
 			return cached;
 	}
 	boolean[] inferredReturnTypeOut = new boolean[1];
-	MethodBinding constructor = inferDiamondConstructor(scope, this, this.resolvedType, this.argumentTypes, inferredReturnTypeOut);
+	MethodBinding constructor = inferDiamondConstructor(scope, this, this.type.resolvedType, this.argumentTypes, inferredReturnTypeOut);
 	if (constructor != null) {
 		this.inferredReturnType = inferredReturnTypeOut[0];
-		if (constructor instanceof ParameterizedGenericMethodBinding && scope.compilerOptions().sourceLevel >= ClassFileConstants.JDK1_8) {
-			// force an inference context to be established for nested poly allocations (to be able to transfer b2), but avoid tunneling through overload resolution. We know this is the MSMB.
-			if (this.expressionContext == INVOCATION_CONTEXT && this.typeExpected == null)
+		if (scope.compilerOptions().sourceLevel >= ClassFileConstants.JDK1_8
+				&& this.expressionContext == INVOCATION_CONTEXT && this.typeExpected == null) { // not ready for invocation type inference
+			if (constructor instanceof PolyParameterizedGenericMethodBinding) {
+				return constructor; // keep this placeholder binding, which also serves as a key into #inferenceContexts
+			} else if (constructor instanceof ParameterizedGenericMethodBinding) {
+				// force an inference context to be established for nested poly allocations (to be able to transfer b2), but avoid tunneling through overload resolution. We know this is the MSMB.
 				constructor = ParameterizedGenericMethodBinding.computeCompatibleMethod18(constructor.shallowOriginal(), this.argumentTypes, scope, this);
-		}
-		if (this.typeExpected != null && this.typeExpected.isProperType(true))
+			}
+		} else if (this.typeExpected != null && this.typeExpected.isProperType(true)) {
 			registerResult(this.typeExpected, constructor);
+		}
 	}
 	return constructor;
 }
@@ -611,6 +621,8 @@ public static MethodBinding inferDiamondConstructor(Scope scope, InvocationSite 
 	// Given the allocation type and the arguments to the constructor, see if we can infer the constructor of the elided parameterized type.
 	MethodBinding factory = scope.getStaticFactory(allocationType, enclosingType, argumentTypes, site);
 	if (factory instanceof ParameterizedGenericMethodBinding && factory.isValidBinding()) {
+		if (site.invocationTargetType() == null && site.getExpressionContext().definesTargetType() && factory instanceof PolyParameterizedGenericMethodBinding)
+			return factory; // during applicability inference keep the PolyParameterizedGenericMethodBinding
 		ParameterizedGenericMethodBinding genericFactory = (ParameterizedGenericMethodBinding) factory;
 		inferredReturnTypeOut[0] = genericFactory.inferredReturnType;
 		SyntheticFactoryMethodBinding sfmb = (SyntheticFactoryMethodBinding) factory.original();
@@ -651,6 +663,8 @@ public TypeBinding[] inferElidedTypes(ParameterizedTypeBinding parameterizedType
 }
 
 public void checkTypeArgumentRedundancy(ParameterizedTypeBinding allocationType, final BlockScope scope) {
+	if (scope.enclosingClassScope().resolvingPolyExpressionArguments) // express arguments may end up influencing the target type
+		return;                                                       // so, conservatively shut off diagnostic.
 	if ((scope.problemReporter().computeSeverity(IProblem.RedundantSpecificationOfTypeArguments) == ProblemSeverities.Ignore) || scope.compilerOptions().sourceLevel < ClassFileConstants.JDK1_7) return;
 	if (allocationType.arguments == null) return;  // raw binding
 	if (this.genericTypeArguments != null) return; // diamond can't occur with explicit type args for constructor
@@ -666,7 +680,7 @@ public void checkTypeArgumentRedundancy(ParameterizedTypeBinding allocationType,
 					break;
 			}
 			if (i == allocationType.arguments.length) {
-				scope.problemReporter().redundantSpecificationOfTypeArguments(this.type, allocationType.arguments);
+				reportTypeArgumentRedundancyProblem(allocationType, scope);
 				return;
 			}
 		}

@@ -268,11 +268,13 @@ public class WildcardBinding extends ReferenceBinding {
 
 	/**
 	 * Collect the substitutes into a map for certain type variables inside the receiver type
-	 * e.g.   Collection<T>.collectSubstitutes(Collection<List<X>>, Map), will populate Map with: T --> List<X>
+	 * e.g. {@code Collection<T>.collectSubstitutes(Collection<List<X>>, Map)} will populate Map with: {@code T --> List<X>}
 	 * Constraints:
+	 * <pre>{@code
 	 *   A << F   corresponds to:   F.collectSubstitutes(..., A, ..., CONSTRAINT_EXTENDS (1))
-	 *   A = F   corresponds to:      F.collectSubstitutes(..., A, ..., CONSTRAINT_EQUAL (0))
+	 *   A = F    corresponds to:   F.collectSubstitutes(..., A, ..., CONSTRAINT_EQUAL (0))
 	 *   A >> F   corresponds to:   F.collectSubstitutes(..., A, ..., CONSTRAINT_SUPER (2))
+	 * }</pre>
 	 */
 	@Override
 	public void collectSubstitutes(Scope scope, TypeBinding actualType, InferenceContext inferenceContext, int constraint) {
@@ -552,7 +554,7 @@ public class WildcardBinding extends ReferenceBinding {
 
 	@Override
 	public String annotatedDebugName() {
-		StringBuffer buffer = new StringBuffer(16);
+		StringBuilder buffer = new StringBuilder(16);
 		AnnotationBinding [] annotations = getTypeAnnotations();
 		for (int i = 0, length = annotations == null ? 0 : annotations.length; i < length; i++) {
 			buffer.append(annotations[i]);
@@ -755,7 +757,8 @@ public class WildcardBinding extends ReferenceBinding {
 		}
 		haveSubstitution |= currentOtherBounds != null;
 		if (haveSubstitution) {
-			return this.environment.createWildcard(this.genericType, this.rank, currentBound, currentOtherBounds, this.boundKind);
+			WildcardBinding wildcard = this.environment.createWildcard(this.genericType, this.rank, currentBound, currentOtherBounds, this.boundKind);
+			return propagateNonConflictingNullAnnotations(wildcard);
 		}
 		return this;
 	}
@@ -783,7 +786,7 @@ public class WildcardBinding extends ReferenceBinding {
             case Wildcard.EXTENDS :
             	if (this.otherBounds == null)
 	                return CharOperation.concat(TypeConstants.WILDCARD_NAME, TypeConstants.WILDCARD_EXTENDS, this.bound.readableName());
-            	StringBuffer buffer = new StringBuffer(10);
+            	StringBuilder buffer = new StringBuilder(10);
             	buffer.append(this.bound.readableName());
             	for (int i = 0, length = this.otherBounds.length; i < length; i++) {
             		buffer.append('&').append(this.otherBounds[i].readableName());
@@ -799,7 +802,7 @@ public class WildcardBinding extends ReferenceBinding {
 
     @Override
 	public char[] nullAnnotatedReadableName(CompilerOptions options, boolean shortNames) {
-    	StringBuffer buffer = new StringBuffer(10);
+    	StringBuilder buffer = new StringBuilder(10);
     	appendNullAnnotation(buffer, options);
         switch (this.boundKind) {
             case Wildcard.UNBOUND :
@@ -864,7 +867,7 @@ public class WildcardBinding extends ReferenceBinding {
             case Wildcard.EXTENDS :
             	if (this.otherBounds == null)
 	                return CharOperation.concat(TypeConstants.WILDCARD_NAME, TypeConstants.WILDCARD_EXTENDS, this.bound.shortReadableName());
-            	StringBuffer buffer = new StringBuffer(10);
+            	StringBuilder buffer = new StringBuilder(10);
             	buffer.append(this.bound.shortReadableName());
             	for (int i = 0, length = this.otherBounds.length; i < length; i++) {
             		buffer.append('&').append(this.otherBounds[i].shortReadableName());
@@ -991,7 +994,7 @@ public class WildcardBinding extends ReferenceBinding {
             case Wildcard.EXTENDS :
             	if (this.otherBounds == null)
                 	return new String(CharOperation.concat(TypeConstants.WILDCARD_NAME, TypeConstants.WILDCARD_EXTENDS, this.bound.debugName().toCharArray()));
-            	StringBuffer buffer = new StringBuffer(this.bound.debugName());
+            	StringBuilder buffer = new StringBuilder(this.bound.debugName());
             	for (int i = 0, length = this.otherBounds.length; i < length; i++) {
             		buffer.append('&').append(this.otherBounds[i].debugName());
             	}
@@ -1086,5 +1089,27 @@ public class WildcardBinding extends ReferenceBinding {
 			}
 		}
 		return super.updateTagBits();
+	}
+
+	@Override
+	public boolean isNonDenotable() {
+		return true;
+	}
+
+	/** When substituting this wildcard with 'type', perhaps null tagbits on this wildcard should be propagated. */
+	TypeBinding propagateNonConflictingNullAnnotations(TypeBinding type) {
+		if (!this.environment.usesNullTypeAnnotations())
+			return type;
+		if (type instanceof InferenceVariable) {
+			// just accumulate any hints:
+			((InferenceVariable) type).nullHints |= (this.tagBits & TagBits.AnnotationNullMASK);
+			return type;
+		}
+		if ((type.tagBits & TagBits.AnnotationNullMASK) != 0)
+			return type; // already annotated
+		AnnotationBinding[] annots = this.environment.nullAnnotationsFromTagBits(this.tagBits & TagBits.AnnotationNullMASK);
+		if (annots == null)
+			return type;
+		return this.environment.createAnnotatedType(type, annots);
 	}
 }

@@ -24,7 +24,7 @@ import org.eclipse.jdt.internal.compiler.util.SimpleSetOfCharArray;
  */
 public interface IModuleAwareNameEnvironment extends INameEnvironment {
 
-	/** Strategies for searching types & packages in classpath locations & modules. */
+	/** Strategies for searching types and packages in classpath locations and modules. */
 	enum LookupStrategy {
 		/** Search a specific named module only. */
 		Named {
@@ -124,7 +124,6 @@ public interface IModuleAwareNameEnvironment extends INameEnvironment {
 
 	/**
 	 * Answer whether the given package (within the given module) contains any compilation unit.
-	 * @param qualifiedPackageName
 	 * @param checkCUs - if true, check contained Compilation Units for a matching package declaration
 	 * @return true iff the package contains at least one compilation unit.
 	 */
@@ -144,7 +143,6 @@ public interface IModuleAwareNameEnvironment extends INameEnvironment {
 	/**
 	 * Lists all packages in the module identified by the given, real module name
 	 * (i.e., this method is implemented only for {@link LookupStrategy#Named}).
-	 * @param moduleName
 	 * @return array of flat, dot-separated package names
 	 */
 	char[][] listPackages(char[] moduleName);

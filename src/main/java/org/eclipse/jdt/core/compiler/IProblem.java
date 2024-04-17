@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2021 IBM Corporation and others.
+ * Copyright (c) 2000, 2024 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -353,7 +353,7 @@ void setSourceStart(int sourceStart);
 	/**
 	 * Problem Categories
 	 * The high bits of a problem ID contains information about the category of a problem.
-	 * For example, (problemID & TypeRelated) != 0, indicates that this problem is type related.
+	 * For example, (problemID &amp; TypeRelated) != 0, indicates that this problem is type related.
 	 *
 	 * A problem category can help to implement custom problem filters. Indeed, when numerous problems
 	 * are listed, focusing on import related problems first might be relevant.
@@ -811,7 +811,7 @@ void setSourceStart(int sourceStart);
 	int PackageCollidesWithType = TypeRelated + 321;
 	int TypeCollidesWithPackage = TypeRelated + 322;
 	int DuplicateTypes = TypeRelated + 323;
-	int IsClassPathCorrect = TypeRelated + 324;
+	int IsClassPathCorrect = TypeRelated + 324; // see also IsClasspathCorrectWithReferencingType below
 	int PublicClassMustMatchFileName = TypeRelated + 325;
 	/** @deprecated - problem is no longer generated */
 	int MustSpecifyPackage = Internal + 326;
@@ -858,6 +858,8 @@ void setSourceStart(int sourceStart);
 	int IllegalVisibilityModifierCombinationForField = FieldRelated + 344;
 	int IllegalModifierCombinationFinalVolatileForField = FieldRelated + 345;
 	int UnexpectedStaticModifierForField = FieldRelated + 346;
+	/** @since 3.32 */
+	int IsClassPathCorrectWithReferencingType = TypeRelated + 347;
 
 	/** @deprecated - problem is no longer generated, use {@link #UndefinedType} instead */
 	int FieldTypeNotFound =  FieldRelated + 349 + ProblemReasons.NotFound; // FieldRelated + 350
@@ -1225,6 +1227,20 @@ void setSourceStart(int sourceStart);
 	int JavadocInvalidProvidesClass = Javadoc + Internal + 1809;
 	/** @since 3.24*/
 	int JavadocInvalidModuleQualification = Javadoc + Internal + 1810;
+	/** @since 3.29*/
+	int JavadocInvalidModule = Javadoc + Internal + 1811;
+	/** @since 3.30*/
+	int JavadocInvalidSnippet = Javadoc + Internal + 1812;
+	/** @since 3.30 */
+	int JavadocInvalidSnippetMissingColon = Javadoc + Internal + 1813;
+	/** @since 3.30 */
+	int JavadocInvalidSnippetContentNewLine = Javadoc + Internal + 1814;
+	/** @since 3.30 */
+	int JavadocInvalidSnippetRegionNotClosed = Javadoc + Internal + 1815;
+	/** @since 3.30 */
+	int JavadocInvalidSnippetRegexSubstringTogether = Javadoc + Internal + 1816;
+	/** @since 3.30 */
+	int JavadocInvalidSnippetDuplicateRegions = Javadoc + Internal + 1817;
 
 	/**
 	 * Generics
@@ -1495,11 +1511,7 @@ void setSourceStart(int sourceStart);
     int ConstructorReferenceNotBelow18 = Internal + Syntax + 647;
     /** @since 3.10 */
     int ExplicitThisParameterNotInLambda = Internal + Syntax + 648;
-    /**
-     * @since 3.10
-     * @deprecated Per https://bugs.openjdk.java.net/browse/JDK-8231435 this problem is no longer raised
-     */
-    @Deprecated
+    /** @since 3.10 */
     int ExplicitAnnotationTargetRequired = TypeRelated + 649;
     /** @since 3.10 */
     int IllegalTypeForExplicitThis = Internal + Syntax + 650;
@@ -1578,6 +1590,12 @@ void setSourceStart(int sourceStart);
 	int BoxingConversion = Internal + 720;
 	/** @since 3.1 */
 	int UnboxingConversion = Internal + 721;
+
+	/**
+	 * Modifiers
+	 * @since 3.28
+	 */
+	int StrictfpNotRequired = Syntax + Internal + 741;
 
 	/**
 	 * Enum
@@ -1859,7 +1877,7 @@ void setSourceStart(int sourceStart);
 	/** @since 3.10 */
 	int NullityMismatchingTypeAnnotationSuperHint = Internal + 954;
 	/** @since 3.10 */
-	int NullityUncheckedTypeAnnotationDetail = Internal + 955;
+	int NullityUncheckedTypeAnnotationDetail = Internal + 955; // see also NullityUncheckedTypeAnnotation
 	/** @since 3.10 */
 	int NullityUncheckedTypeAnnotationDetailSuperHint = Internal + 956;
 	/** @since 3.10 */
@@ -1918,6 +1936,19 @@ void setSourceStart(int sourceStart);
 	int AnnotatedTypeArgumentToUnannotated = Internal + 983;
 	/** @since 3.21 */
 	int AnnotatedTypeArgumentToUnannotatedSuperHint = Internal + 984;
+	/** @since 3.32 */
+	int NonNullArrayContentNotInitialized = Internal + 985;
+	/**
+	 * Both {@link #NullityUncheckedTypeAnnotationDetail} and {@link #NullityUncheckedTypeAnnotation}
+	 * signal that unchecked conversion is needed to pass a value between annotated and un-annotated code.
+	 * In the case of {@link #NullityUncheckedTypeAnnotationDetail} the mismatch was observed only on some
+	 * detail of the types involved (type arguments or array components), for which the UI does not (yet)
+	 * offer a quick fix, whereas {@link #NullityUncheckedTypeAnnotation} affects the toplevel type and thus
+	 * can be easily fixed by adding the appropriate null annotation.
+	 *
+	 * @since 3.36
+	 */
+	int NullityUncheckedTypeAnnotation = Internal + 986;
 
 
 	// Java 8 work
@@ -2016,6 +2047,23 @@ void setSourceStart(int sourceStart);
 
 	/** @since 3.14 */
 	int DuplicateResource = Internal + 1251;
+
+	/** @since 3.37 */
+	int ShouldMarkMethodAsOwning = Internal + 1260;
+	/** @since 3.37 */
+	int MandatoryCloseNotShown = Internal + 1261;
+	/** @since 3.37 */
+	int MandatoryCloseNotShownAtExit = Internal + 1262;
+	/** @since 3.37 */
+	int NotOwningResourceField = Internal + 1263;
+	/** @since 3.37 */
+	int OwningFieldInNonResourceClass = Internal + 1264;
+	/** @since 3.37 */
+	int OwningFieldShouldImplementClose = Internal + 1265;
+	/** @since 3.37 */
+	int OverrideReducingParamterOwning = Internal + 1266;
+	/** @since 3.37 */
+	int OverrideAddingReturnOwning = Internal + 1267;
 
 	// terminally
 	/** @since 3.14 */
@@ -2160,6 +2208,9 @@ void setSourceStart(int sourceStart);
 	int VarIsNotAllowedHere = Syntax + 1511; // ''var'' is not allowed here
 	/** @since 3.16 */
 	int VarCannotBeMixedWithNonVarParams = Syntax + 1512; // ''var'' cannot be mixed with explicit or implicit parameters
+	/** @since 3.35 */
+	int VarCannotBeUsedWithTypeArguments = Syntax + 1513; // ''var'' cannot be used with type arguments (e.g. as in ''var<Integer> x = List.of(42)'')
+
 	/** @since 3.18
 	 * @deprecated preview related error - will be removed
 	 * @noreference preview related error */
@@ -2370,12 +2421,14 @@ void setSourceStart(int sourceStart);
 
 	/* records - end */
 	/* Local and Nested Static Declarations - Begin */
-	/** @since 3.24
-	 * @noreference preview feature error */
-	int LocalStaticsIllegalVisibilityModifierForInterfaceLocalType = PreviewRelated + 1765;
-	/** @since 3.24
-	 * @noreference preview feature error */
-	int IllegalModifierForLocalEnumDeclaration = PreviewRelated + 1766;
+	/** @since 3.28 */
+	int LocalStaticsIllegalVisibilityModifierForInterfaceLocalType = TypeRelated + 1765;
+	/** @since 3.28 */
+	int IllegalModifierForLocalEnumDeclaration = TypeRelated + 1766;
+	/** @since 3.28 */
+	int ClassExtendFinalRecord = TypeRelated + 1767;
+	/** @since 3.29 */
+	int RecordErasureIncompatibilityInCanonicalConstructor = TypeRelated + 1768;
 	/* records - end */
 
 
@@ -2387,6 +2440,7 @@ void setSourceStart(int sourceStart);
 	 */
 	int PatternVariableRedefined = Internal + 1781;
 	/** @since 3.26
+	 * @deprecated
 	 */
 	int PatternSubtypeOfExpression = Internal + 1782;
 	/** @since 3.26
@@ -2396,58 +2450,146 @@ void setSourceStart(int sourceStart);
 	 */
 	int PatternVariableRedeclared = Internal + 1784;
 
-	/** @since 3.26
-	 * @noreference */
+	/** @since 3.28
+	 */
 	int DiscouragedValueBasedTypeSynchronization = Internal + 1820;
 
-	/** @since 3.24
-	 * @noreference preview feature error */
-	int SealedMissingClassModifier = PreviewRelated + 1850;
-	/** @since 3.24
-	 * @noreference preview feature error */
-	int SealedDisAllowedNonSealedModifierInClass = PreviewRelated + 1851;
-	/** @since 3.24
-	 * @noreference preview feature error */
-	int SealedSuperClassDoesNotPermit = PreviewRelated + 1852;
-	/** @since 3.24
-	 * @noreference preview feature error */
-	int SealedSuperInterfaceDoesNotPermit = PreviewRelated + 1853;
-	/** @since 3.24
-	 * @noreference preview feature error */
-	int SealedMissingSealedModifier = PreviewRelated + 1854;
-	/** @since 3.24
-	 * @noreference preview feature error */
-	int SealedMissingInterfaceModifier = PreviewRelated + 1855;
-	/** @since 3.24
-	 * @noreference preview feature error */
-	int SealedDuplicateTypeInPermits = PreviewRelated + 1856;
-	/** @since 3.24
-	 * @noreference preview feature error */
-	int SealedNotDirectSuperClass = PreviewRelated + 1857;
-	/** @since 3.24
-	 * @noreference preview feature error */
-	int SealedPermittedTypeOutsideOfModule = PreviewRelated + 1858;
-	/** @since 3.24
-	 * @noreference preview feature error */
-	int SealedPermittedTypeOutsideOfPackage = PreviewRelated + 1859;
-	/** @since 3.24
-	 * @noreference preview feature error */
-	int SealedSealedTypeMissingPermits = PreviewRelated + 1860;
-	/** @since 3.24
-	 * @noreference preview feature error */
-	int SealedInterfaceIsSealedAndNonSealed = PreviewRelated + 1861;
-	/** @since 3.24
-	 * @noreference preview feature error */
-	int SealedDisAllowedNonSealedModifierInInterface = PreviewRelated + 1862;
-	/** @since 3.24
-	 * @noreference preview feature error */
-	int SealedNotDirectSuperInterface = PreviewRelated + 1863;
-	/** @since 3.24
-	 * @noreference preview feature error */
-	int SealedLocalDirectSuperTypeSealed = PreviewRelated + 1864;
-	/** @since 3.24
-	 * @noreference preview feature error */
-	int SealedAnonymousClassCannotExtendSealedType = PreviewRelated + 1865;
+	/** @since 3.28 */
+	int SealedMissingClassModifier = TypeRelated + 1850;
+	/** @since 3.28 */
+	int SealedDisAllowedNonSealedModifierInClass = TypeRelated + 1851;
+	/** @since 3.28 */
+	int SealedSuperClassDoesNotPermit = TypeRelated + 1852;
+	/** @since 3.28 */
+	int SealedSuperInterfaceDoesNotPermit = TypeRelated + 1853;
+	/** @since 3.28 */
+	int SealedMissingSealedModifier = TypeRelated + 1854;
+	/** @since 3.28 */
+	int SealedMissingInterfaceModifier = TypeRelated + 1855;
+	/** @since 3.28 */
+	int SealedDuplicateTypeInPermits = TypeRelated + 1856;
+	/** @since 3.28 */
+	int SealedNotDirectSuperClass = TypeRelated + 1857;
+	/** @since 3.28 */
+	int SealedPermittedTypeOutsideOfModule = TypeRelated + 1858;
+	/** @since 3.28 */
+	int SealedPermittedTypeOutsideOfPackage = TypeRelated + 1859;
+	/** @since 3.28 */
+	int SealedSealedTypeMissingPermits = TypeRelated + 1860;
+	/** @since 3.28 */
+	int SealedInterfaceIsSealedAndNonSealed = TypeRelated + 1861;
+	/** @since 3.28 */
+	int SealedDisAllowedNonSealedModifierInInterface = TypeRelated + 1862;
+	/** @since 3.28 */
+	int SealedNotDirectSuperInterface = TypeRelated + 1863;
+	/** @since 3.28 */
+	int SealedLocalDirectSuperTypeSealed = TypeRelated + 1864;
+	/** @since 3.28 */
+	int SealedAnonymousClassCannotExtendSealedType = TypeRelated + 1865;
+	/** @since 3.28 */
+	int SealedSuperTypeInDifferentPackage = TypeRelated + 1866;
+	/** @since 3.28 */
+	int SealedSuperTypeDisallowed = TypeRelated + 1867;
 	/* Java15 errors - end */
 
-	}
+	/**
+	 * @since 3.28
+	 * @noreference preview feature error
+	 */
+	int LocalReferencedInGuardMustBeEffectivelyFinal = PreviewRelated + 1900;
+	/** @since 3.28
+	 * @noreference preview feature error */
+	int ConstantWithPatternIncompatible = PreviewRelated + 1901;
+	/**
+	 * @since 3.28
+	 * @noreference preview feature error
+	 */
+	int IllegalFallthroughToPattern = PreviewRelated + 1902;
+
+	/** @since 3.28
+	 * @noreference preview feature error */
+	int PatternDominated = PreviewRelated + 1906;
+	/** @since 3.28
+	 * @noreference preview feature error */
+	int IllegalTotalPatternWithDefault = PreviewRelated + 1907;
+	/** @since 3.28
+	 * @noreference preview feature error */
+	int EnhancedSwitchMissingDefault = PreviewRelated + 1908;
+	/** @since 3.28
+	 * @noreference preview feature error */
+	int DuplicateTotalPattern = PreviewRelated + 1909;
+
+	 /** @since 3.34
+	 * @noreference preview feature error */
+	int PatternSwitchNullOnlyOrFirstWithDefault = PreviewRelated + 1920;
+
+	 /** @since 3.34
+	 * @noreference preview feature error */
+	int PatternSwitchCaseDefaultOnlyAsSecond = PreviewRelated + 1921;
+
+	/**
+	 * @since 3.34
+	 * @noreference preview feature error
+	 */
+	int IllegalFallthroughFromAPattern = PreviewRelated + 1922;
+
+	/** @since 3.28
+	 * @noreference preview feature error */
+	int UnnecessaryNullCaseInSwitchOverNonNull = PreviewRelated + 1910;
+	/** @since 3.28
+	 * @noreference preview feature error */
+	int UnexpectedTypeinSwitchPattern = PreviewRelated + 1911;
+	/**
+	 * @since 3.32
+	 * @noreference preview feature
+	 */
+	int UnexpectedTypeinRecordPattern =  PreviewRelated + 1912;
+	/**
+	 * @since 3.32
+	 * @noreference preview feature
+	 */
+	int RecordPatternMismatch =  PreviewRelated + 1913;
+	/**
+	 * @since 3.32
+	 * @noreference preview feature
+	 */
+	int PatternTypeMismatch =  PreviewRelated + 1914;
+	/**
+	 * @since 3.32
+	 * @noreference preview feature
+	 * @deprecated
+	 */
+	int RawTypeInRecordPattern =  PreviewRelated + 1915;
+	/**
+	 * @since 3.36
+	 * @noreference preview feature
+	 */
+	int FalseConstantInGuard =  PreviewRelated + 1916;
+	/**
+	 * @since 3.34
+	 * @noreference preview feature
+	 */
+	int CannotInferRecordPatternTypes = PreviewRelated + 1940;
+
+	/**
+	 * @since 3.36
+	 */
+	int IllegalRecordPattern = TypeRelated + 1941;
+
+
+	/**
+	 * @since 3.35
+	 */
+	int SyntheticAccessorNotEnclosingMethod = MethodRelated + 1990;
+
+	/**
+	 * @since 3.37
+	 * @noreference preview feature
+	 */
+	int UnderscoreCannotBeUsedHere = PreviewRelated + 2000;
+	/**
+	 * @since 3.37
+	 * @noreference preview feature
+	 */
+	int UnnamedVariableMustHaveInitializer = PreviewRelated + 2001;
+}

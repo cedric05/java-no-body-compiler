@@ -21,11 +21,10 @@ package org.eclipse.jdt.internal.compiler.env;
  *
  * This name environment adds a method to switch on/off the search for secondary types.
  * Refer {@link #findType(char[], char[][], boolean)}.
- *
  */
 public interface INameEnvironmentExtension extends INameEnvironment {
 	/**
-	 * Find a type named <typeName> in the package <packageName>.
+	 * Find a type named {@code <typeName>} in the package {@code <packageName>}.
 	 * Answer the binary form of the type if it is known to be consistent.
 	 * Otherwise, answer the compilation unit which defines the type
 	 * or null if the type does not exist.
@@ -37,7 +36,7 @@ public interface INameEnvironmentExtension extends INameEnvironment {
 	 * internal name A$B, but the source file for A is answered if the binary
 	 * file is inconsistent.
 	 *
-	 * The flag <searchWithSecondaryTypes> can be used to switch on/off the search for secondary types.
+	 * The flag {@code <searchWithSecondaryTypes>} can be used to switch on/off the search for secondary types.
 	 * This is useful because the search for secondary types may by very expensive regarding the performance
 	 * and in many cases it isn't necessary to search for secondary types.
 	 *

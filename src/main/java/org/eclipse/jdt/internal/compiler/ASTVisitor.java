@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2020 IBM Corporation and others.
+ * Copyright (c) 2000, 2023 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -39,6 +39,9 @@ public abstract class ASTVisitor {
 			AnnotationMethodDeclaration annotationTypeDeclaration,
 			ClassScope classScope) {
 			// do nothing by default
+	}
+	public void endVisit(TypePattern anyPattern, BlockScope scope) {
+		// do nothing by default
 	}
 	public void endVisit(Argument argument, BlockScope scope) {
 		// do nothing by default
@@ -152,6 +155,9 @@ public abstract class ASTVisitor {
 		BlockScope scope) {
 		// do nothing by default
 	}
+	public void endVisit(FakeDefaultLiteral fakeDefaultLiteral, BlockScope scope) {
+		// do nothing by default
+	}
 	public void endVisit(FalseLiteral falseLiteral, BlockScope scope) {
 		// do nothing by default
 	}
@@ -172,6 +178,9 @@ public abstract class ASTVisitor {
 	}
 	public void endVisit(ForStatement forStatement, BlockScope scope) {
 		// do nothing by default
+	}
+	public void endVisit(GuardedPattern guardedPattern, BlockScope scope) {
+		// do nothing by default, keep traversing
 	}
 	public void endVisit(IfStatement ifStatement, BlockScope scope) {
 		// do nothing by default
@@ -278,31 +287,17 @@ public abstract class ASTVisitor {
 		// do nothing by default
 	}
 	/**
-	 * @param annotation
-	 * @param scope
 	 * @since 3.1
 	 */
 	public void endVisit(MarkerAnnotation annotation, BlockScope scope) {
 		// do nothing by default
 	}
-	/**
-	 * @param annotation
-	 * @param scope
-	 */
 	public void endVisit(MarkerAnnotation annotation, ClassScope scope) {
 		// do nothing by default
 	}
-	/**
-	 * @param pair
-	 * @param scope
-	 */
 	public void endVisit(MemberValuePair pair, BlockScope scope) {
 		// do nothing by default
 	}
-	/**
-	 * @param pair
-	 * @param scope
-	 */
 	public void endVisit(MemberValuePair pair, ClassScope scope) {
 		// do nothing by default
 	}
@@ -316,8 +311,6 @@ public abstract class ASTVisitor {
 		// do nothing by default
 	}
 	/**
-	 * @param annotation
-	 * @param scope
 	 * @since 3.1
 	 */
 	public void endVisit(NormalAnnotation annotation, BlockScope scope) {
@@ -330,6 +323,9 @@ public abstract class ASTVisitor {
 		// do nothing by default
 	}
 	public void endVisit(OR_OR_Expression or_or_Expression, BlockScope scope) {
+		// do nothing by default
+	}
+	public void endVisit(Pattern patternExpression, BlockScope scope) {
 		// do nothing by default
 	}
 	public void endVisit(ParameterizedQualifiedTypeReference parameterizedQualifiedTypeReference, BlockScope scope) {
@@ -395,21 +391,18 @@ public abstract class ASTVisitor {
     		ClassScope scope) {
 		// do nothing by default
 	}
+	public void endVisit(RecordPattern recordPattern, BlockScope scope) {
+		// do nothing by default
+	}
 	public void endVisit(ReturnStatement returnStatement, BlockScope scope) {
 		// do nothing by default
 	}
 	/**
-	 * @param annotation
-	 * @param scope
 	 * @since 3.1
 	 */
 	public void endVisit(SingleMemberAnnotation annotation, BlockScope scope) {
 		// do nothing by default
 	}
-	/**
-	 * @param annotation
-	 * @param scope
-	 */
 	public void endVisit(SingleMemberAnnotation annotation, ClassScope scope) {
 		// do nothing by default
 	}
@@ -526,6 +519,9 @@ public abstract class ASTVisitor {
 	public void endVisit(RecordComponent recordComponent, BlockScope scope) {
 		// do nothing by default, keep traversing
 	}
+	public boolean visit(RecordPattern recordPattern, BlockScope scope) {
+		return true; // do nothing by default, keep traversing
+	}
 	public boolean visit(
     		AllocationExpression allocationExpression,
     		BlockScope scope) {
@@ -537,6 +533,9 @@ public abstract class ASTVisitor {
 	public boolean visit(
 			AnnotationMethodDeclaration annotationTypeDeclaration,
 			ClassScope classScope) {
+		return true; // do nothing by default, keep traversing
+	}
+	public boolean visit(TypePattern anyPattern, BlockScope scope) {
 		return true; // do nothing by default, keep traversing
 	}
 	public boolean visit(Argument argument, BlockScope scope) {
@@ -654,6 +653,9 @@ public abstract class ASTVisitor {
 		BlockScope scope) {
 		return true; // do nothing by default, keep traversing
 	}
+	public boolean visit(FakeDefaultLiteral fakeDefaultLiteral, BlockScope scope) {
+		return true; // do nothing by default, keep traversing
+	}
 	public boolean visit(FalseLiteral falseLiteral, BlockScope scope) {
 		return true; // do nothing by default, keep traversing
 	}
@@ -673,6 +675,9 @@ public abstract class ASTVisitor {
 		return true; // do nothing by default, keep traversing
 	}
 	public boolean visit(ForStatement forStatement, BlockScope scope) {
+		return true; // do nothing by default, keep traversing
+	}
+	public boolean visit(GuardedPattern guardedPattern, BlockScope scope) {
 		return true; // do nothing by default, keep traversing
 	}
 	public boolean visit(IfStatement ifStatement, BlockScope scope) {
@@ -780,32 +785,20 @@ public abstract class ASTVisitor {
 		return true; // do nothing by default, keep traversing
 	}
 	/**
-	 * @param annotation
-	 * @param scope
 	 * @since 3.1
 	 */
 	public boolean visit(MarkerAnnotation annotation, BlockScope scope) {
 		return true;
 	}
-	/**
-	 * @param annotation
-	 * @param scope
-	 */
 	public boolean visit(MarkerAnnotation annotation, ClassScope scope) {
 		return true;
 	}
 	/**
-	 * @param pair
-	 * @param scope
 	 * @since 3.1
 	 */
 	public boolean visit(MemberValuePair pair, BlockScope scope) {
 		return true;
 	}
-	/**
-	 * @param pair
-	 * @param scope
-	 */
 	public boolean visit(MemberValuePair pair, ClassScope scope) {
 		return true;
 	}
@@ -821,17 +814,11 @@ public abstract class ASTVisitor {
 		return true; // do nothing by default, keep traversing
 	}
 	/**
-	 * @param annotation
-	 * @param scope
 	 * @since 3.1
 	 */
 	public boolean visit(NormalAnnotation annotation, BlockScope scope) {
 		return true;
 	}
-	/**
-	 * @param annotation
-	 * @param scope
-	 */
 	public boolean visit(NormalAnnotation annotation, ClassScope scope) {
 		return true;
 	}
@@ -851,6 +838,9 @@ public abstract class ASTVisitor {
 		return true; // do nothing by default, keep traversing
 	}
 	public boolean visit(ParameterizedSingleTypeReference parameterizedSingleTypeReference, ClassScope scope) {
+		return true; // do nothing by default, keep traversing
+	}
+	public boolean visit(Pattern patternExpression, BlockScope scope) {
 		return true; // do nothing by default, keep traversing
 	}
 	public boolean visit(PostfixExpression postfixExpression, BlockScope scope) {
@@ -908,17 +898,11 @@ public abstract class ASTVisitor {
 		return true; // do nothing by default, keep traversing
 	}
 	/**
-	 * @param annotation
-	 * @param scope
 	 * @since 3.1
 	 */
 	public boolean visit(SingleMemberAnnotation annotation, BlockScope scope) {
 		return true;
 	}
-	/**
-	 * @param annotation
-	 * @param scope
-	 */
 	public boolean visit(SingleMemberAnnotation annotation, ClassScope scope) {
 		return true;
 	}

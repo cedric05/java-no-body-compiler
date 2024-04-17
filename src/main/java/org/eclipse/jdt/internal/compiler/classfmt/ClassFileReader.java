@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2021 IBM Corporation and others.
+ * Copyright (c) 2000, 2023 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -22,6 +22,8 @@ package org.eclipse.jdt.internal.compiler.classfmt;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.Arrays;
 import java.util.function.Predicate;
 
@@ -52,7 +54,7 @@ import org.eclipse.jdt.internal.compiler.util.Util;
 public class ClassFileReader extends ClassFileStruct implements IBinaryType {
 
 	private int accessFlags;
-	private char[] classFileName;
+	private final char[] classFileName;
 	private char[] className;
 	private int classNameIndex;
 	private int constantPoolCount;
@@ -88,9 +90,9 @@ public class ClassFileReader extends ClassFileStruct implements IBinaryType {
 	private boolean isRecord;
 	private int recordComponentsCount;
 	private RecordComponentInfo[] recordComponents;
-
+	URI path;
 private static String printTypeModifiers(int modifiers) {
-	java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+	java.io.StringWriter out = new java.io.StringWriter();
 	java.io.PrintWriter print = new java.io.PrintWriter(out);
 
 	if ((modifiers & ClassFileConstants.AccPublic) != 0) print.print("public "); //$NON-NLS-1$
@@ -110,7 +112,8 @@ public static ClassFileReader read(File file) throws ClassFormatException, IOExc
 
 public static ClassFileReader read(File file, boolean fullyInitialize) throws ClassFormatException, IOException {
 	byte classFileBytes[] = Util.getFileByteContent(file);
-	ClassFileReader classFileReader = new ClassFileReader(classFileBytes, file.getAbsolutePath().toCharArray());
+	URI uri = file.toURI();
+	ClassFileReader classFileReader = new ClassFileReader(uri, classFileBytes, file.getAbsolutePath().toCharArray());
 	if (fullyInitialize) {
 		classFileReader.initialize();
 	}
@@ -122,7 +125,7 @@ public static ClassFileReader read(InputStream stream, String fileName) throws C
 }
 
 public static ClassFileReader read(InputStream stream, String fileName, boolean fullyInitialize) throws ClassFormatException, IOException {
-	byte classFileBytes[] = Util.getInputStreamAsByteArray(stream, -1);
+	byte classFileBytes[] = Util.getInputStreamAsByteArray(stream);
 	ClassFileReader classFileReader = new ClassFileReader(classFileBytes, fileName.toCharArray());
 	if (fullyInitialize) {
 		classFileReader.initialize();
@@ -143,7 +146,7 @@ public static ClassFileReader readFromJrt(
 		String filename)
 
 		throws ClassFormatException, java.io.IOException {
-		return JRTUtil.getClassfile(jrt, filename, module);
+		return JRTUtil.getClassfile(jrt, filename, module == null ? null : new String(module.name()));
 	}
 public static ClassFileReader readFromModule(
 		File jrt,
@@ -154,20 +157,38 @@ public static ClassFileReader readFromModule(
 		throws ClassFormatException, java.io.IOException {
 		return JRTUtil.getClassfile(jrt, filename, moduleName, moduleNameFilter);
 }
-public static ClassFileReader read(
-	java.util.zip.ZipFile zip,
-	String filename,
-	boolean fullyInitialize)
-	throws ClassFormatException, java.io.IOException {
+
+public static ClassFileReader read(java.util.zip.ZipFile zip, String filename, boolean fullyInitialize)
+		throws ClassFormatException, java.io.IOException {
 	java.util.zip.ZipEntry ze = zip.getEntry(filename);
-	if (ze == null)
+	if (ze == null) {
 		return null;
-	byte classFileBytes[] = Util.getZipEntryByteContent(ze, zip);
-	ClassFileReader classFileReader = new ClassFileReader(classFileBytes, filename.toCharArray());
-	if (fullyInitialize) {
-		classFileReader.initialize();
 	}
-	return classFileReader;
+	try (InputStream stream = zip.getInputStream(ze)) {
+		URI uri =  URI.create("jar:file://" + toUri(zip.getName()).getRawPath() + "!/" + filename); //$NON-NLS-1$ //$NON-NLS-2$
+		ClassFileReader classFileReader = new ClassFileReader(uri, Util.getInputStreamAsByteArray(stream),
+				filename.toCharArray());
+		if (fullyInitialize) {
+			classFileReader.initialize();
+		}
+		return classFileReader;
+	}
+}
+
+/**
+ * same as <code>new java.io.File(absoluteNormalFilePath).toURI()</code> if absoluteNormalFilePath is not a directory
+ * but faster because it avoid IO for the isDirectory check.
+ **/
+private static URI toUri(final String absoluteNormalFilePath) {
+	String p = absoluteNormalFilePath.replace(File.separatorChar, '/');
+	if (!p.startsWith("/")) { //$NON-NLS-1$
+		p = "/" + p; //$NON-NLS-1$
+	}
+	try {
+		return new URI("file", null, p, null); //$NON-NLS-1$
+	} catch (URISyntaxException x) {
+		throw new RuntimeException(x);
+	}
 }
 
 public static ClassFileReader read(String fileName) throws ClassFormatException, java.io.IOException {
@@ -179,6 +200,8 @@ public static ClassFileReader read(String fileName, boolean fullyInitialize) thr
 }
 
 /**
+ * hint: Use {@link #ClassFileReader(URI, byte[], char[])} where an annotation processor might be in the picture
+ *
  * @param classFileBytes Actual bytes of a .class file
  * @param fileName	Actual name of the file that contains the bytes, can be null
  *
@@ -187,8 +210,23 @@ public static ClassFileReader read(String fileName, boolean fullyInitialize) thr
 public ClassFileReader(byte classFileBytes[], char[] fileName) throws ClassFormatException {
 	this(classFileBytes, fileName, false);
 }
+/**
+ * @param path URI pointing to the resource of the .class file
+ * @param classFileBytes Actual bytes of a .class file
+ * @param fileName	Actual name of the file that contains the bytes, can be null
+ *
+ * @exception ClassFormatException
+ */
+public ClassFileReader(URI path, byte classFileBytes[], char[] fileName) throws ClassFormatException {
+	this(classFileBytes, fileName, false);
+	this.path = path;
+	if (this.moduleDeclaration != null)
+		this.moduleDeclaration.path = this.path;
+}
 
 /**
+ * hint: Use {@link #ClassFileReader(URI, byte[], char[])} where an annotation processor might be in the picture
+ *
  * @param classFileBytes byte[]
  * 		Actual bytes of a .class file
  *
@@ -539,7 +577,7 @@ public ExternalAnnotationStatus getExternalAnnotationStatus() {
 /**
  * Conditionally add external annotations to the mix.
  * If 'member' is given it must be either of IBinaryField or IBinaryMethod, in which case we're seeking annotations for that member.
- * Otherwise we're seeking annotations for top-level elements of a type (type parameters & super types).
+ * Otherwise we're seeking annotations for top-level elements of a type (type parameters and super types).
  */
 @Override
 public ITypeAnnotationWalker enrichWithExternalAnnotationsFor(ITypeAnnotationWalker walker, Object member, LookupEnvironment environment) {
@@ -661,7 +699,7 @@ public char[] getEnclosingMethod() {
 	}
 	if (this.enclosingMethod == null) {
 		// read the name
-		StringBuffer buffer = new StringBuffer();
+		StringBuilder buffer = new StringBuilder();
 
 		int nameAndTypeOffset = this.constantPoolOffsets[this.enclosingNameAndTypeIndex];
 		int utf8Offset = this.constantPoolOffsets[u2At(nameAndTypeOffset + 1)];
@@ -930,7 +968,7 @@ public long getTagBits() {
 
 /**
  * Answer the major/minor version defined in this class file according to the VM spec.
- * as a long: (major<<16)+minor
+ * as a long:  {@code (major<<16)+minor}
  * @return the major/minor version found
  */
 public long getVersion() {
@@ -1460,5 +1498,19 @@ public boolean isRecord() {
 @Override
 public IRecordComponent[] getRecordComponents() {
 	return this.recordComponents;
+}
+@Override
+public URI getURI() {
+	return this.path;
+}
+public boolean isStaticInner(char[] innerTypeName) {
+	if (this.innerInfos != null) {
+		for (InnerClassInfo innerClassInfo : this.innerInfos) {
+			if (Arrays.equals(innerTypeName, innerClassInfo.getName())) {
+				return (innerClassInfo.getModifiers() & ClassFileConstants.AccStatic) != 0;
+			}
+		}
+	}
+	return false;
 }
 }

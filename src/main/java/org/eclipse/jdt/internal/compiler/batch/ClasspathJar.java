@@ -65,15 +65,16 @@ public ClasspathJar(File file, boolean closeZipFileAtEnd,
 public List<Classpath> fetchLinkedJars(FileSystem.ClasspathSectionProblemReporter problemReporter) {
 	// expected to be called once only - if multiple calls desired, consider
 	// using a cache
-	InputStream inputStream = null;
 	try {
 		initialize();
 		ArrayList<Classpath> result = new ArrayList<>();
 		ZipEntry manifest = this.zipFile.getEntry(TypeConstants.META_INF_MANIFEST_MF);
 		if (manifest != null) { // non-null implies regular file
-			inputStream = this.zipFile.getInputStream(manifest);
 			ManifestAnalyzer analyzer = new ManifestAnalyzer();
-			boolean success = analyzer.analyzeManifestContents(inputStream);
+			boolean success;
+			try (InputStream inputStream = this.zipFile.getInputStream(manifest)) {
+				success = analyzer.analyzeManifestContents(inputStream);
+			}
 			List calledFileNames = analyzer.getCalledFileNames();
 			if (problemReporter != null) {
 				if (!success || analyzer.getClasspathSectionsCount() == 1 &&  calledFileNames == null) {
@@ -88,7 +89,10 @@ public List<Classpath> fetchLinkedJars(FileSystem.ClasspathSectionProblemReporte
 				int lastSeparator = directoryPath.lastIndexOf(File.separatorChar);
 				directoryPath = directoryPath.substring(0, lastSeparator + 1); // potentially empty (see bug 214731)
 				while (calledFilesIterator.hasNext()) {
-					result.add(new ClasspathJar(new File(directoryPath + (String) calledFilesIterator.next()), this.closeZipFileAtEnd, this.accessRuleSet, this.destinationPath));
+					File linkedFile = new File(directoryPath + (String) calledFilesIterator.next());
+					if (linkedFile.isFile()) {
+						result.add(new ClasspathJar(linkedFile, this.closeZipFileAtEnd, this.accessRuleSet, this.destinationPath));
+					}
 				}
 			}
 		}
@@ -97,14 +101,6 @@ public List<Classpath> fetchLinkedJars(FileSystem.ClasspathSectionProblemReporte
 		// JRE 9 could throw an IAE if the path is incorrect. We are to ignore such
 		// linked jars
 		return null;
-	} finally {
-		if (inputStream != null) {
-			try {
-				inputStream.close();
-			} catch (IOException e) {
-				// best effort
-			}
-		}
 	}
 }
 @Override

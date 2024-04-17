@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2013, 2019 GK Software AG.
+ * Copyright (c) 2013, 2022 GK Software AG.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -18,7 +18,7 @@ package org.eclipse.jdt.internal.compiler.lookup;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -121,6 +121,12 @@ class ConstraintExpressionFormula extends ConstraintFormula {
 							if (exprType == null || !exprType.isValidBinding())
 								return FALSE;
 							return ConstraintTypeFormula.create(exprType, this.right, COMPATIBLE, this.isSoft);
+						}
+						if (innerCtx.isInexactVarargsInference()) {
+							// See https://github.com/eclipse-jdt/eclipse.jdt.core/pull/524
+							// Skip the inner inference result for now until the varargs method
+							// is inferred a second time by a proper target type.
+							return TRUE;
 						}
 						if (innerCtx.stepCompleted >= InferenceContext18.APPLICABILITY_INFERRED) {
 							inferenceContext.integrateInnerInferenceB2(innerCtx);
@@ -228,7 +234,7 @@ class ConstraintExpressionFormula extends ConstraintFormula {
 													LambdaExpression lambda, ParameterizedTypeBinding targetTypeWithWildCards)
 	{
 		if (lambda.argumentsTypeElided()) {
-			return lambda.findGroundTargetTypeForElidedLambda(scope, targetTypeWithWildCards);
+			return targetTypeWithWildCards.getNonWildcardParameterization(scope);
 		} else {
 			SuspendedInferenceRecord previous = inferenceContext.enterLambda(lambda);
 			try {
@@ -334,6 +340,8 @@ class ConstraintExpressionFormula extends ConstraintFormula {
 			TypeBinding rPrime = compileTimeDecl.isConstructor() ? compileTimeDecl.declaringClass : compileTimeDecl.returnType.capture(inferenceContext.scope, reference.sourceStart(), reference.sourceEnd());
 			if (rPrime.id == TypeIds.T_void)
 				return FALSE;
+			if (compileTimeDecl.isConstructor() && inferenceContext.environment.usesNullTypeAnnotations())
+				rPrime = inferenceContext.environment.createNonNullAnnotatedType(rPrime);
 			return ConstraintTypeFormula.create(rPrime, r, COMPATIBLE, this.isSoft);
 		}
 	}
@@ -416,7 +424,7 @@ class ConstraintExpressionFormula extends ConstraintFormula {
 			ParameterizedTypeBinding parameterizedType = InferenceContext18.parameterizedWithWildcard(rTheta);
 			if (parameterizedType != null && parameterizedType.arguments != null) {
 				TypeBinding[] arguments = parameterizedType.arguments;
-				InferenceVariable[] betas = inferenceContext.addTypeVariableSubstitutions(arguments);
+				InferenceVariable[] betas = inferenceContext.addTypeVariableSubstitutions(arguments, false);
 				ParameterizedTypeBinding gbeta = inferenceContext.environment.createParameterizedType(
 						parameterizedType.genericType(), betas, parameterizedType.enclosingType(), parameterizedType.getTypeAnnotations());
 				inferenceContext.currentBounds.captures.put(gbeta, parameterizedType); // established: both types have nonnull arguments
@@ -452,7 +460,7 @@ class ConstraintExpressionFormula extends ConstraintFormula {
 						toResolve = true;
 				}
 				if (toResolve) {
-					BoundSet solution = inferenceContext.solve(new InferenceVariable[]{alpha});
+					BoundSet solution = inferenceContext.solve(new InferenceVariable[]{alpha}, false);
 					if (solution == null)
 						return false;
 					TypeBinding u = solution.getInstantiation(alpha, null).capture(inferenceContext.scope, invocationSite.sourceStart(), invocationSite.sourceEnd());
@@ -499,7 +507,7 @@ class ConstraintExpressionFormula extends ConstraintFormula {
 					return EMPTY_VARIABLE_LIST;
 				}
 				MethodBinding sam = targetType.getSingleAbstractMethod(context.scope, true);
-				final Set<InferenceVariable> variables = new HashSet<>();
+				final Set<InferenceVariable> variables = new LinkedHashSet<>();
 				if (lambda.argumentsTypeElided()) {
 					// i)
 					int len = sam.parameters.length;
@@ -524,7 +532,7 @@ class ConstraintExpressionFormula extends ConstraintFormula {
 			}
 			if (this.right.isFunctionalInterface(context.scope) && !this.left.isExactMethodReference()) {
 				MethodBinding sam = this.right.getSingleAbstractMethod(context.scope, true);
-				final Set<InferenceVariable> variables = new HashSet<>();
+				final Set<InferenceVariable> variables = new LinkedHashSet<>();
 				int len = sam.parameters.length;
 				for (int i = 0; i < len; i++) {
 					sam.parameters[i].collectInferenceVariables(variables);
@@ -533,13 +541,13 @@ class ConstraintExpressionFormula extends ConstraintFormula {
 			}
 		} else if (this.left instanceof ConditionalExpression && this.left.isPolyExpression()) {
 			ConditionalExpression expr = (ConditionalExpression) this.left;
-			Set<InferenceVariable> variables = new HashSet<>();
+			Set<InferenceVariable> variables = new LinkedHashSet<>();
 			variables.addAll(new ConstraintExpressionFormula(expr.valueIfTrue, this.right, COMPATIBLE).inputVariables(context));
 			variables.addAll(new ConstraintExpressionFormula(expr.valueIfFalse, this.right, COMPATIBLE).inputVariables(context));
 			return variables;
 		} else if (this.left instanceof SwitchExpression && this.left.isPolyExpression()) {
 			SwitchExpression expr = (SwitchExpression) this.left;
-			Set<InferenceVariable> variables = new HashSet<>();
+			Set<InferenceVariable> variables = new LinkedHashSet<>();
 			for (Expression re : expr.resultExpressions) {
 				variables.addAll(new ConstraintExpressionFormula(re, this.right, COMPATIBLE).inputVariables(context));
 			}
@@ -551,11 +559,12 @@ class ConstraintExpressionFormula extends ConstraintFormula {
 	// debugging:
 	@Override
 	public String toString() {
-		StringBuffer buf = new StringBuffer().append(LEFT_ANGLE_BRACKET);
+		StringBuilder buf = new StringBuilder().append(LEFT_ANGLE_BRACKET);
 		this.left.printExpression(4, buf);
 		buf.append(relationToString(this.relation));
 		appendTypeName(buf, this.right);
 		buf.append(RIGHT_ANGLE_BRACKET);
 		return buf.toString();
 	}
+
 }

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2020 IBM Corporation and others.
+ * Copyright (c) 2000, 2023 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -149,8 +149,8 @@ public void analyseCode(ClassScope classScope, InitializationFlowContext initial
 			}
 		}
 
-		// nullity and mark as assigned
-		analyseArguments(classScope.environment(), flowInfo, this.arguments, this.binding);
+		// nullity, owning and mark as assigned
+		analyseArguments(classScope.environment(), flowInfo, initializerFlowContext, this.arguments, this.binding);
 
 		// propagate to constructor call
 		if (this.constructorCall != null) {
@@ -185,7 +185,7 @@ public void analyseCode(ClassScope classScope, InitializationFlowContext initial
 					constructorContext.expireNullCheckedFieldInfo();
 				}
 				if (compilerOptions.analyseResourceLeaks) {
-					FakedTrackingVariable.cleanUpUnassigned(this.scope, stat, flowInfo);
+					FakedTrackingVariable.cleanUpUnassigned(this.scope, stat, flowInfo, false);
 				}
 			}
 		}
@@ -424,6 +424,7 @@ private void internalGenerateCode(ClassScope classScope, ClassFile classFile) {
 		MethodScope initializerScope = declaringType.initializerScope;
 		initializerScope.computeLocalVariablePositions(argSlotSize, codeStream); // offset by the argument size (since not linked to method scope)
 
+		codeStream.pushPatternAccessTrapScope(this.scope);
 		boolean needFieldInitializations = this.constructorCall == null || this.constructorCall.accessMode != ExplicitConstructorCall.This;
 
 		// post 1.4 target level, synthetic initializations occur prior to explicit constructor call
@@ -465,6 +466,9 @@ private void internalGenerateCode(ClassScope classScope, ClassFile classFile) {
 		if ((this.bits & ASTNode.NeedFreeReturn) != 0) {
 			codeStream.return_();
 		}
+		// See https://github.com/eclipse-jdt/eclipse.jdt.core/issues/1796#issuecomment-1933458054
+		codeStream.exitUserScope(this.scope, lvb -> !lvb.isParameter());
+		codeStream.handleRecordAccessorExceptions(this.scope);
 		// local variable attributes
 		codeStream.exitUserScope(this.scope);
 		codeStream.recordPositionsFrom(0, this.bodyEnd > 0 ? this.bodyEnd : this.sourceStart);
@@ -593,7 +597,7 @@ public void parseStatements(Parser parser, CompilationUnitDeclaration unit) {
 }
 
 @Override
-public StringBuffer printBody(int indent, StringBuffer output) {
+public StringBuilder printBody(int indent, StringBuilder output) {
 	output.append(" {"); //$NON-NLS-1$
 	if (this.constructorCall != null) {
 		output.append('\n');
@@ -658,7 +662,7 @@ public void resolveStatements() {
 			this.constructorCall = null;
 		} else if (sourceType.isRecord() &&
 				!(this instanceof CompactConstructorDeclaration) && // compact constr should be marked as canonical?
-				(this.binding != null && (this.binding.tagBits & TagBits.IsCanonicalConstructor) == 0) &&
+				(this.binding != null && !this.binding.isCanonicalConstructor()) &&
 				this.constructorCall.accessMode != ExplicitConstructorCall.This) {
 			this.scope.problemReporter().recordMissingExplicitConstructorCallInNonCanonicalConstructor(this);
 			this.constructorCall = null;

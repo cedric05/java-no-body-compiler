@@ -20,14 +20,14 @@ import org.eclipse.jdt.internal.compiler.util.Util;
 
 public class DefaultProblem extends CategorizedProblem {
 	private char[] fileName;
-	private int id;
+	private final int id;
 	private int startPosition;
 	private int endPosition;
 	private int line;
 	public int column;
 	public int severity;
-	private String[] arguments;
-	private String message;
+	private final String[] arguments;
+	private final String message;
 
 	// cannot directly point to IJavaModelMarker constants from within batch compiler
 	private static final String MARKER_TYPE_PROBLEM = "org.eclipse.jdt.core.problem"; //$NON-NLS-1$
@@ -73,7 +73,7 @@ public String errorReportSource(char[] unitSource) {
 		|| unitSource.length == 0)
 		return Messages.problem_noSourceInformation;
 
-	StringBuffer errorBuffer = new StringBuffer();
+	StringBuilder errorBuffer = new StringBuilder();
 	errorBuffer.append(' ').append(Messages.bind(Messages.problem_atLine, String.valueOf(this.line)));
 	errorBuffer.append(Util.LINE_SEPARATOR);
 	errorBuffer.append('\t');

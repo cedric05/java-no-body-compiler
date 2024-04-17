@@ -13,6 +13,7 @@
  *******************************************************************************/
 package org.eclipse.jdt.internal.compiler.classfmt;
 
+import java.net.URI;
 import java.util.Arrays;
 
 import org.eclipse.jdt.core.compiler.CharOperation;
@@ -37,6 +38,7 @@ public class ModuleInfo extends ClassFileStruct implements IBinaryModule {
 
 	protected AnnotationInfo[] annotations;
 	private long tagBits;
+	public URI path;
 
 
 	@Override
@@ -314,11 +316,11 @@ public class ModuleInfo extends ClassFileStruct implements IBinaryModule {
 		}
 		@Override
 		public String toString() {
-			StringBuffer buffer = new StringBuffer();
+			StringBuilder buffer = new StringBuilder();
 			toStringContent(buffer);
 			return buffer.toString();
 		}
-		protected void toStringContent(StringBuffer buffer) {
+		protected void toStringContent(StringBuilder buffer) {
 			buffer.append(this.packageName);
 			if (this.exportedToCount > 0) {
 				buffer.append(" to "); //$NON-NLS-1$
@@ -365,11 +367,11 @@ public class ModuleInfo extends ClassFileStruct implements IBinaryModule {
 	}
 	@Override
 	public String toString() {
-		StringBuffer buffer = new StringBuffer(getClass().getName());
+		StringBuilder buffer = new StringBuilder(getClass().getName());
 		toStringContent(buffer);
 		return buffer.toString();
 	}
-	protected void toStringContent(StringBuffer buffer) {
+	protected void toStringContent(StringBuilder buffer) {
 		buffer.append("\nmodule "); //$NON-NLS-1$
 		buffer.append(this.name).append(' ');
 		buffer.append('{').append('\n');
@@ -391,5 +393,9 @@ public class ModuleInfo extends ClassFileStruct implements IBinaryModule {
 			}
 		}
 		buffer.append('\n').append('}').toString();
+	}
+	@Override
+	public URI getURI() {
+		return this.path;
 	}
 }

@@ -46,8 +46,7 @@ public LocalTypeBinding(ClassScope scope, SourceTypeBinding enclosingType, CaseS
 	}
 	this.enclosingCase = switchCase;
 	this.sourceStart = typeDeclaration.sourceStart;
-	MethodScope methodScope = scope.enclosingMethodScope();
-	MethodBinding methodBinding = methodScope.referenceMethodBinding();
+	MethodBinding methodBinding = scope.enclosingMethod();
 	if (methodBinding != null) {
 		this.enclosingMethod = methodBinding;
 	}
@@ -123,7 +122,7 @@ public char[] computeUniqueKey(boolean isLeaf) {
 	char[] outerKey = outermostEnclosingType().computeUniqueKey(isLeaf);
 	int semicolon = CharOperation.lastIndexOf(';', outerKey);
 
-	StringBuffer sig = new StringBuffer();
+	StringBuilder sig = new StringBuilder();
 	sig.append(outerKey, 0, semicolon);
 
 	// insert $sourceStart
@@ -202,7 +201,7 @@ public char[] readableName() /*java.lang.Object,  p.X<T> */ {
 	}
 	TypeVariableBinding[] typeVars;
 	if ((typeVars = typeVariables()) != Binding.NO_TYPE_VARIABLES) {
-	    StringBuffer nameBuffer = new StringBuffer(10);
+	    StringBuilder nameBuffer = new StringBuilder(10);
 	    nameBuffer.append(readableName).append('<');
 	    for (int i = 0, length = typeVars.length; i < length; i++) {
 	        if (i > 0) nameBuffer.append(',');
@@ -228,7 +227,7 @@ public char[] shortReadableName() /*Object*/ {
 	}
 	TypeVariableBinding[] typeVars;
 	if ((typeVars = typeVariables()) != Binding.NO_TYPE_VARIABLES) {
-	    StringBuffer nameBuffer = new StringBuffer(10);
+	    StringBuilder nameBuffer = new StringBuilder(10);
 	    nameBuffer.append(shortReadableName).append('<');
 	    for (int i = 0, length = typeVars.length; i < length; i++) {
 	        if (i > 0) nameBuffer.append(',');

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2021 IBM Corporation and others.
+ * Copyright (c) 2000, 2023 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -40,7 +40,9 @@ import org.eclipse.jdt.core.compiler.CharOperation;
 public interface TypeConstants {
 
 	char[] JAVA = "java".toCharArray(); //$NON-NLS-1$
+	char[] JAVAC = "javac".toCharArray(); //$NON-NLS-1$
 	char[] JAVAX = "javax".toCharArray(); //$NON-NLS-1$
+	char[] JAKARTA = "jakarta".toCharArray(); //$NON-NLS-1$
 	char[] LANG = "lang".toCharArray(); //$NON-NLS-1$
 	char[] IO = "io".toCharArray(); //$NON-NLS-1$
 	char[] NIO = "nio".toCharArray(); //$NON-NLS-1$
@@ -115,6 +117,9 @@ public interface TypeConstants {
     char[] LAMBDA_TYPE = "<lambda>".toCharArray(); //$NON-NLS-1$
     char[] UPPER_MODULE = "MODULE".toCharArray(); //$NON-NLS-1$
     char[] UPPER_RECORD_COMPONENT = "RECORD_COMPONENT".toCharArray(); //$NON-NLS-1$
+    char[] YIELD = "yield".toCharArray(); //$NON-NLS-1$
+    // Duplicated since java.lang.invoke.StringConcatFactory.TAG_ARG isn't public
+    char[] STRING_CONCAT_MARKER_1 = new char[] {'\u0001'};
 
     // JEP 286
 	char[] VAR = "var".toCharArray(); //$NON-NLS-1$
@@ -172,6 +177,8 @@ public interface TypeConstants {
 	char[][] JAVA_LANG_STRING = {JAVA, LANG, "String".toCharArray()}; //$NON-NLS-1$
 	char[][] JAVA_LANG_STRINGBUFFER = {JAVA, LANG, "StringBuffer".toCharArray()}; //$NON-NLS-1$
 	char[][] JAVA_LANG_STRINGBUILDER = {JAVA, LANG, "StringBuilder".toCharArray()}; //$NON-NLS-1$
+	char[][] JAVA_LANG_STRINGTEMPLATE = {JAVA, LANG, "StringTemplate".toCharArray()}; //$NON-NLS-1$
+	char[][] JAVA_LANG_STRINGTEMPLATE_PROCESSOR = {JAVA, LANG, "StringTemplate$Processor".toCharArray()}; //$NON-NLS-1$
 	char[][] JAVA_LANG_SYSTEM = {JAVA, LANG, "System".toCharArray()}; //$NON-NLS-1$
 	char[][] JAVA_LANG_RUNTIMEEXCEPTION = {JAVA, LANG, "RuntimeException".toCharArray()}; //$NON-NLS-1$
 	char[][] JAVA_LANG_THROWABLE = {JAVA, LANG, "Throwable".toCharArray()}; //$NON-NLS-1$
@@ -189,6 +196,7 @@ public interface TypeConstants {
 	char[][] JAVA_LANG_VOID = {JAVA, LANG, "Void".toCharArray()}; //$NON-NLS-1$
 	char[][] JAVA_UTIL_COLLECTION = {JAVA, UTIL, "Collection".toCharArray()}; //$NON-NLS-1$
 	char[][] JAVA_UTIL_ITERATOR = {JAVA, UTIL, "Iterator".toCharArray()}; //$NON-NLS-1$
+	char[] NEXT = "next".toCharArray(); //$NON-NLS-1$
 	char[][] JAVA_UTIL_OBJECTS = {JAVA, UTIL, "Objects".toCharArray()}; //$NON-NLS-1$
 	char[][] JAVA_UTIL_LIST = {JAVA, UTIL, "List".toCharArray()}; //$NON-NLS-1$
 	char[][] JAVA_UTIL_ARRAYS = {JAVA, UTIL, "Arrays".toCharArray()}; //$NON-NLS-1$
@@ -207,6 +215,7 @@ public interface TypeConstants {
 	char[][] JAVA_LANG_ANNOTATION_RETENTIONPOLICY = {JAVA, LANG, ANNOTATION, "RetentionPolicy".toCharArray()}; //$NON-NLS-1$
 	char[][] JAVA_LANG_ANNOTATION_ELEMENTTYPE = {JAVA, LANG, ANNOTATION, "ElementType".toCharArray()}; //$NON-NLS-1$
 	char[][] JDK_INTERNAL_PREVIEW_FEATURE = {JDK, INTERNAL, "PreviewFeature".toCharArray()}; //$NON-NLS-1$
+	char[][] JDK_INTERNAL_JAVAC_PREVIEW_FEATURE = {JDK, INTERNAL, JAVAC, "PreviewFeature".toCharArray()}; //$NON-NLS-1$
 	char[][] JAVA_LANG_REFLECT_FIELD = new char[][] {JAVA, LANG, REFLECT, "Field".toCharArray()}; //$NON-NLS-1$
 	char[][] JAVA_LANG_REFLECT_METHOD = new char[][] {JAVA, LANG, REFLECT, "Method".toCharArray()}; //$NON-NLS-1$
 	char[][] JAVA_IO_CLOSEABLE = new char[][] { JAVA, IO, "Closeable".toCharArray()};//$NON-NLS-1$
@@ -241,9 +250,20 @@ public interface TypeConstants {
 	char[][] JAVA_LANG_INVOKE_LAMBDAMETAFACTORY = {JAVA, LANG, INVOKE, "LambdaMetafactory".toCharArray()}; //$NON-NLS-1$
 	char[][] JAVA_LANG_INVOKE_SERIALIZEDLAMBDA = {JAVA, LANG, INVOKE, "SerializedLambda".toCharArray()}; //$NON-NLS-1$
 	char[][] JAVA_LANG_INVOKE_METHODHANDLES = {JAVA, LANG, INVOKE, "MethodHandles".toCharArray()}; //$NON-NLS-1$
+	char[][] JAVA_LANG_INVOKE_METHODHANDLE = {JAVA, LANG, INVOKE, "MethodHandle".toCharArray()}; //$NON-NLS-1$
+	char[][] JAVA_LANG_INVOKE_VARHANDLE = {JAVA, LANG, INVOKE, "VarHandle".toCharArray()}; //$NON-NLS-1$
+	char[][] JAVA_LANG_INVOKE_STRING_CONCAT_FACTORY = {JAVA, LANG, INVOKE, "StringConcatFactory".toCharArray()}; //$NON-NLS-1$
+
 	char[][] JAVA_LANG_AUTOCLOSEABLE =  {JAVA, LANG, "AutoCloseable".toCharArray()}; //$NON-NLS-1$
 	char[] CLOSE = "close".toCharArray(); //$NON-NLS-1$
 	char[][] JAVA_LANG_RUNTIME_OBJECTMETHODS = {JAVA, LANG, RUNTIME, "ObjectMethods".toCharArray()}; //$NON-NLS-1$
+	char[][] JAVA_LANG_RUNTIME_SWITCHBOOTSTRAPS = {JAVA, LANG, RUNTIME, "SwitchBootstraps".toCharArray()}; //$NON-NLS-1$
+	char[][] JAVA_LANG_INVOKE_CONSTANTBOOTSTRAP = {JAVA, LANG, INVOKE, "ConstantBootstraps".toCharArray()}; //$NON-NLS-1$
+	char[][] JAVA_LANG_ENUM_ENUMDESC = {JAVA, LANG, "Enum$EnumDesc".toCharArray()}; //$NON-NLS-1$
+	char[][] JAVA_LANG_CONSTANT_CLASSDESC = {JAVA, LANG, "constant".toCharArray(), "ClassDesc".toCharArray()}; //$NON-NLS-1$ //$NON-NLS-2$
+	char[][] JAVA_LANG_RUNTIME_TEMPLATERUNTIME = {JAVA, LANG, RUNTIME, "TemplateRuntime".toCharArray()}; //$NON-NLS-1$
+	char[][] JAVA_LANG_STRING_TEMPLATE_STR = {JAVA, LANG, "StringTemplate".toCharArray(), "STR".toCharArray()}; //$NON-NLS-1$ //$NON-NLS-2$
+
 	// known helper functions for closing a Closeable (all receive a Closeable as their first argument):
 	public static class CloseMethodRecord {
 		public char[][] typeName;
@@ -285,8 +305,6 @@ public interface TypeConstants {
 		"ObjectOutputStream".toCharArray(), //$NON-NLS-1$
 		"FilterInputStream".toCharArray(), //$NON-NLS-1$
 		"FilterOutputStream".toCharArray(), //$NON-NLS-1$
-		"DataInputStream".toCharArray(), //$NON-NLS-1$
-		"DataOutputStream".toCharArray(), //$NON-NLS-1$
 		"PushbackInputStream".toCharArray(), //$NON-NLS-1$
 		"SequenceInputStream".toCharArray(), //$NON-NLS-1$
 		"PrintStream".toCharArray(), //$NON-NLS-1$
@@ -359,6 +377,9 @@ public interface TypeConstants {
 		new char[][] {JAVA, UTIL, "Formatter".toCharArray() }, //$NON-NLS-1$
 		new char[][] {JAVA, UTIL, "Scanner".toCharArray() }, //$NON-NLS-1$
 	};
+	// well-known method of j.u.s.Stream:
+	char[][] JAVA_UTIL_STREAM__STREAM = { JAVA, UTIL, "stream".toCharArray(), "Stream".toCharArray() }; //$NON-NLS-1$ //$NON-NLS-2$
+	char[] FILTER = "filter".toCharArray(); //$NON-NLS-1$
 
 	// different assertion utilities:
 	char[] ASSERT_CLASS = "Assert".toCharArray(); //$NON-NLS-1$
@@ -409,6 +430,7 @@ public interface TypeConstants {
 	char[] INJECT_PACKAGE = "inject".toCharArray(); //$NON-NLS-1$
 	char[] INJECT_TYPE = "Inject".toCharArray(); //$NON-NLS-1$
 	char[][] JAVAX_ANNOTATION_INJECT_INJECT = new char[][] { JAVAX, INJECT_PACKAGE, INJECT_TYPE };
+	char[][] JAKARTA_ANNOTATION_INJECT_INJECT = new char[][] { JAKARTA, INJECT_PACKAGE, INJECT_TYPE };
 	char[][] COM_GOOGLE_INJECT_INJECT = new char[][] {COM, GOOGLE, INJECT_PACKAGE, INJECT_TYPE };
 	//    detail for the above:
 	char[] OPTIONAL = "optional".toCharArray(); //$NON-NLS-1$

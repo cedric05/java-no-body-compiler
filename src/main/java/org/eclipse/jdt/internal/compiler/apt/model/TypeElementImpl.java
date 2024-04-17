@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2005, 2021 IBM Corporation and others.
+ * Copyright (c) 2005, 2023 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -7,10 +7,6 @@
  * https://www.eclipse.org/legal/epl-2.0/
  *
  * SPDX-License-Identifier: EPL-2.0
- *
- * This is an implementation of an early-draft specification developed under the Java
- * Community Process (JCP) and is made available for testing and evaluation purposes
- * only. The code is not compatible with any specification of the JCP.
  *
  * Contributors:
  *     IBM Corporation - initial API and implementation
@@ -60,7 +56,6 @@ public class TypeElementImpl extends ElementImpl implements TypeElement {
 	/**
 	 * Compares Element instances possibly returned by
 	 * {@link TypeElement#getEnclosedElements()} based on their source location, if available.
-	 *
 	 */
 	private static final class SourceLocationComparator implements Comparator<Element> {
 		private final IdentityHashMap<ElementImpl, Integer> sourceStartCache = new IdentityHashMap<>();
@@ -74,11 +69,11 @@ public class TypeElementImpl extends ElementImpl implements TypeElement {
 		}
 
 		private int getSourceStart(ElementImpl e) {
-			Integer value = sourceStartCache.get(e);
+			Integer value = this.sourceStartCache.get(e);
 
 			if (value == null) {
 				value = determineSourceStart(e);
-				sourceStartCache.put(e, value);
+				this.sourceStartCache.put(e, value);
 			}
 
 			return value;
@@ -132,13 +127,12 @@ public class TypeElementImpl extends ElementImpl implements TypeElement {
 	private final ElementKind _kindHint;
 
 	/**
-	 * In general, clients should call {@link Factory#newDeclaredType(ReferenceBinding)} or
-	 * {@link Factory#newElement(org.eclipse.jdt.internal.compiler.lookup.Binding)} to
-	 * create new instances.
+	 * In general, clients should call {@link Factory#newElement(org.eclipse.jdt.internal.compiler.lookup.Binding)}
+	 * to create new instances.
 	 */
 	TypeElementImpl(BaseProcessingEnvImpl env, ReferenceBinding binding, ElementKind kindHint) {
 		super(env, binding);
-		_kindHint = kindHint;
+		this._kindHint = kindHint;
 	}
 
 	@Override
@@ -150,33 +144,33 @@ public class TypeElementImpl extends ElementImpl implements TypeElement {
 	@Override
 	protected AnnotationBinding[] getAnnotationBindings()
 	{
-		return ((ReferenceBinding)_binding).getAnnotations();
+		return ((ReferenceBinding)this._binding).getAnnotations();
 	}
 
 	@Override
 	public List<? extends Element> getEnclosedElements() {
-		ReferenceBinding binding = (ReferenceBinding)_binding;
+		ReferenceBinding binding = (ReferenceBinding)this._binding;
 		List<Element> enclosed = new ArrayList<>(binding.fieldCount() + binding.methods().length + binding.memberTypes().length);
 		for (MethodBinding method : binding.methods()) {
-			ExecutableElement executable = new ExecutableElementImpl(_env, method);
+			ExecutableElement executable = new ExecutableElementImpl(this._env, method);
 			enclosed.add(executable);
 		}
 		for (FieldBinding field : binding.fields()) {
 			// TODO no field should be excluded according to the JLS
 			if (!field.isSynthetic()) {
-				 VariableElement variable = new VariableElementImpl(_env, field);
+				 VariableElement variable = new VariableElementImpl(this._env, field);
 				 enclosed.add(variable);
 			}
 		}
 		if (binding.isRecord()) {
 			RecordComponentBinding[] components = binding.components();
 			for (RecordComponentBinding comp : components) {
-				RecordComponentElement rec = new RecordComponentElementImpl(_env, comp);
+				RecordComponentElement rec = new RecordComponentElementImpl(this._env, comp);
 				enclosed.add(rec);
 			}
 		}
 		for (ReferenceBinding memberType : binding.memberTypes()) {
-			TypeElement type = new TypeElementImpl(_env, memberType, null);
+			TypeElement type = new TypeElementImpl(this._env, memberType, null);
 			enclosed.add(type);
 		}
 		Collections.sort(enclosed, new SourceLocationComparator());
@@ -185,27 +179,26 @@ public class TypeElementImpl extends ElementImpl implements TypeElement {
 
 	@Override
     public List<? extends RecordComponentElement> getRecordComponents() {
-		if (_binding instanceof SourceTypeBinding) {
-			SourceTypeBinding binding = (SourceTypeBinding) _binding;
+		if (this._binding instanceof ReferenceBinding) {
+			ReferenceBinding binding = (ReferenceBinding) this._binding;
 			List<RecordComponentElement> enclosed = new ArrayList<>();
 			for (RecordComponentBinding comp : binding.components()) {
-				RecordComponentElement variable = new RecordComponentElementImpl(_env, comp);
+				RecordComponentElement variable = new RecordComponentElementImpl(this._env, comp);
 				enclosed.add(variable);
 			}
 			Collections.sort(enclosed, new SourceLocationComparator());
 			return Collections.unmodifiableList(enclosed);
 		}
-		// TODO: Add code for BinaryTypeBinding, which, as of now doesn't seem to contain components
 		return Collections.emptyList();
     }
 
 	@Override
 	public List<? extends TypeMirror> getPermittedSubclasses() {
-		ReferenceBinding binding = (ReferenceBinding)_binding;
+		ReferenceBinding binding = (ReferenceBinding)this._binding;
 		if (binding.isSealed()) {
 			List<TypeMirror> permitted = new ArrayList<>();
 			for (ReferenceBinding type : binding.permittedTypes()) {
-				TypeMirror typeMirror = _env.getFactory().newTypeMirror(type);
+				TypeMirror typeMirror = this._env.getFactory().newTypeMirror(type);
 				permitted.add(typeMirror);
 			}
 			return Collections.unmodifiableList(permitted);
@@ -214,20 +207,20 @@ public class TypeElementImpl extends ElementImpl implements TypeElement {
     }
 	@Override
 	public Element getEnclosingElement() {
-		ReferenceBinding binding = (ReferenceBinding)_binding;
+		ReferenceBinding binding = (ReferenceBinding)this._binding;
 		ReferenceBinding enclosingType = binding.enclosingType();
 		if (null == enclosingType) {
 			// this is a top level type; get its package
-			return _env.getFactory().newPackageElement(binding.fPackage);
+			return this._env.getFactory().newPackageElement(binding.fPackage);
 		}
 		else {
-			return _env.getFactory().newElement(binding.enclosingType());
+			return this._env.getFactory().newElement(binding.enclosingType());
 		}
 	}
 
 	@Override
 	public String getFileName() {
-		char[] name = ((ReferenceBinding)_binding).getFileName();
+		char[] name = ((ReferenceBinding)this._binding).getFileName();
 		if (name == null)
 			return null;
 		return new String(name);
@@ -235,13 +228,13 @@ public class TypeElementImpl extends ElementImpl implements TypeElement {
 
 	@Override
 	public List<? extends TypeMirror> getInterfaces() {
-		ReferenceBinding binding = (ReferenceBinding)_binding;
+		ReferenceBinding binding = (ReferenceBinding)this._binding;
 		if (null == binding.superInterfaces() || binding.superInterfaces().length == 0) {
 			return Collections.emptyList();
 		}
 		List<TypeMirror> interfaces = new ArrayList<>(binding.superInterfaces().length);
 		for (ReferenceBinding interfaceBinding : binding.superInterfaces()) {
-			TypeMirror interfaceType = _env.getFactory().newTypeMirror(interfaceBinding);
+			TypeMirror interfaceType = this._env.getFactory().newTypeMirror(interfaceBinding);
 			if (interfaceType.getKind() == TypeKind.ERROR) {
 				if (this._env.getSourceVersion().compareTo(SourceVersion.RELEASE_6) > 0) {
 					// for jdk 7 and above, add error types
@@ -256,10 +249,10 @@ public class TypeElementImpl extends ElementImpl implements TypeElement {
 
 	@Override
 	public ElementKind getKind() {
-		if (null != _kindHint) {
-			return _kindHint;
+		if (null != this._kindHint) {
+			return this._kindHint;
 		}
-		ReferenceBinding refBinding = (ReferenceBinding)_binding;
+		ReferenceBinding refBinding = (ReferenceBinding)this._binding;
 		// The order of these comparisons is important: e.g., enum is subset of class
 		if (refBinding.isEnum()) {
 			return ElementKind.ENUM;
@@ -285,18 +278,18 @@ public class TypeElementImpl extends ElementImpl implements TypeElement {
 	@Override
 	public Set<Modifier> getModifiers()
 	{
-		ReferenceBinding refBinding = (ReferenceBinding)_binding;
+		ReferenceBinding refBinding = (ReferenceBinding)this._binding;
 		int modifiers = refBinding.modifiers;
 		if (refBinding.isInterface() && refBinding.isNestedType()) {
 			modifiers |= ClassFileConstants.AccStatic;
 		}
-		
+
 		return Factory.getModifiers(modifiers, getKind(), refBinding.isBinaryBinding());
 	}
 
 	@Override
 	public NestingKind getNestingKind() {
-		ReferenceBinding refBinding = (ReferenceBinding)_binding;
+		ReferenceBinding refBinding = (ReferenceBinding)this._binding;
 		if (refBinding.isAnonymousType()) {
 			return NestingKind.ANONYMOUS;
 		} else if (refBinding.isLocalType()) {
@@ -310,13 +303,13 @@ public class TypeElementImpl extends ElementImpl implements TypeElement {
 	@Override
 	PackageElement getPackage()
 	{
-		ReferenceBinding binding = (ReferenceBinding)_binding;
-		return _env.getFactory().newPackageElement(binding.fPackage);
+		ReferenceBinding binding = (ReferenceBinding)this._binding;
+		return this._env.getFactory().newPackageElement(binding.fPackage);
 	}
 
 	@Override
 	public Name getQualifiedName() {
-		ReferenceBinding binding = (ReferenceBinding)_binding;
+		ReferenceBinding binding = (ReferenceBinding)this._binding;
 		char[] qName;
 		if (binding.isMemberType()) {
 			qName = CharOperation.concatWith(binding.enclosingType().compoundName, binding.sourceName, '.');
@@ -335,31 +328,31 @@ public class TypeElementImpl extends ElementImpl implements TypeElement {
 	@Override
 	public Name getSimpleName()
 	{
-		ReferenceBinding binding = (ReferenceBinding)_binding;
+		ReferenceBinding binding = (ReferenceBinding)this._binding;
 		return new NameImpl(binding.sourceName());
 	}
 
 	@Override
 	public TypeMirror getSuperclass() {
-		ReferenceBinding binding = (ReferenceBinding)_binding;
+		ReferenceBinding binding = (ReferenceBinding)this._binding;
 		ReferenceBinding superBinding = binding.superclass();
 		if (null == superBinding || binding.isInterface()) {
-			return _env.getFactory().getNoType(TypeKind.NONE);
+			return this._env.getFactory().getNoType(TypeKind.NONE);
 		}
 		// superclass of a type must be a DeclaredType
-		return _env.getFactory().newTypeMirror(superBinding);
+		return this._env.getFactory().newTypeMirror(superBinding);
 	}
 
 	@Override
 	public List<? extends TypeParameterElement> getTypeParameters() {
-		ReferenceBinding binding = (ReferenceBinding)_binding;
+		ReferenceBinding binding = (ReferenceBinding)this._binding;
 		TypeVariableBinding[] variables = binding.typeVariables();
 		if (variables.length == 0) {
 			return Collections.emptyList();
 		}
 		List<TypeParameterElement> params = new ArrayList<>(variables.length);
 		for (TypeVariableBinding variable : variables) {
-			params.add(_env.getFactory().newTypeParameterElement(variable, this));
+			params.add(this._env.getFactory().newTypeParameterElement(variable, this));
 		}
 		return Collections.unmodifiableList(params);
 	}
@@ -374,7 +367,7 @@ public class TypeElementImpl extends ElementImpl implements TypeElement {
 		if (hiddenBinding.isPrivate()) {
 			return false;
 		}
-		ReferenceBinding hiderBinding = (ReferenceBinding)_binding;
+		ReferenceBinding hiderBinding = (ReferenceBinding)this._binding;
 		if (TypeBinding.equalsEquals(hiddenBinding, hiderBinding)) {
 			return false;
 		}

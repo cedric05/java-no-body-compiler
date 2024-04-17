@@ -27,8 +27,6 @@ import java.util.Set;
 import javax.tools.JavaFileManager.Location;
 import javax.tools.StandardLocation;
 
-import org.eclipse.jdt.internal.compiler.batch.ClasspathJrt;
-
 public class ModuleLocationHandler {
 
 	Map<Location, LocationContainer> containers;
@@ -37,10 +35,6 @@ public class ModuleLocationHandler {
 		this.containers = new HashMap<>();
 	}
 
-	public void newSystemLocation(Location loc, ClasspathJrt cp) throws IOException {
-		SystemLocationContainer systemLocationWrapper = new SystemLocationContainer(StandardLocation.SYSTEM_MODULES, cp);
-		this.containers.put(loc, systemLocationWrapper);
-	}
 	public void newSystemLocation(Location loc, JrtFileSystem jrt) throws IOException {
 		SystemLocationContainer systemLocationWrapper = new SystemLocationContainer(StandardLocation.SYSTEM_MODULES, jrt);
 		this.containers.put(loc, systemLocationWrapper);
@@ -153,7 +147,7 @@ public class ModuleLocationHandler {
 			 this.clear();
 		 }
 		@Override
-		Iterable<? extends Path> getPaths() {
+		public Iterable<? extends Path> getPaths() {
 			if (this.paths != null)
 				return this.paths;
 			return this.locationPaths.keySet();
@@ -180,9 +174,6 @@ public class ModuleLocationHandler {
 				this.locationPaths.put(path, wrapper);
 			}
 		}
-		public SystemLocationContainer(Location loc, ClasspathJrt cp) throws IOException {
-			this(loc, new JrtFileSystem(cp.file));
-		}
 	}
 	class OutputLocationContainer extends LocationContainer {
 
@@ -201,7 +192,7 @@ public class ModuleLocationHandler {
 		}
 	}
 
-	class LocationWrapper implements Location {
+	public class LocationWrapper implements Location {
 
 		Location loc;
 		boolean output;
@@ -224,7 +215,7 @@ public class ModuleLocationHandler {
 			return this.output;
 		}
 
-		Iterable<? extends Path> getPaths() {
+		public Iterable<? extends Path> getPaths() {
 			return this.paths;
 		}
 
@@ -265,7 +256,7 @@ public class ModuleLocationHandler {
 		}
 
 		@Override
-		Iterable<? extends Path> getPaths() {
+		public Iterable<? extends Path> getPaths() {
 			return this.paths;
 		}
 

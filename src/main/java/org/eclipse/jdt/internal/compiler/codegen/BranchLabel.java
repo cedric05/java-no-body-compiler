@@ -160,11 +160,11 @@ void branchWide() {
 }
 
 public int forwardReferenceCount() {
-	if (this.delegate != null) this.delegate.forwardReferenceCount();
+	if (this.delegate != null) return this.delegate.forwardReferenceCount();
 	return this.forwardReferenceCount;
 }
 public int[] forwardReferences() {
-	if (this.delegate != null) this.delegate.forwardReferences();
+	if (this.delegate != null) return this.delegate.forwardReferences();
 	return this.forwardReferences;
 }
 public void initialize(CodeStream stream) {
@@ -249,7 +249,7 @@ public void place() { // Currently lacking wide support.
 public String toString() {
 	String basic = getClass().getName();
 	basic = basic.substring(basic.lastIndexOf('.')+1);
-	StringBuffer buffer = new StringBuffer(basic);
+	StringBuilder buffer = new StringBuilder(basic);
 	buffer.append('@').append(Integer.toHexString(hashCode()));
 	buffer.append("(position=").append(this.position); //$NON-NLS-1$
 	if (this.delegate != null) buffer.append("delegate=").append(this.delegate); //$NON-NLS-1$

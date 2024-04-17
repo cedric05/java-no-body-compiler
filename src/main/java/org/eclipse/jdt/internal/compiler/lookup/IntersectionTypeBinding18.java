@@ -25,7 +25,6 @@ package org.eclipse.jdt.internal.compiler.lookup;
 
 import java.util.Set;
 
-import org.eclipse.jdt.core.compiler.InvalidInputException;
 import org.eclipse.jdt.internal.compiler.ast.Wildcard;
 import org.eclipse.jdt.internal.compiler.classfmt.ClassFileConstants;
 
@@ -38,6 +37,8 @@ import org.eclipse.jdt.internal.compiler.classfmt.ClassFileConstants;
  * </ul>
  */
 public class IntersectionTypeBinding18 extends ReferenceBinding {
+
+	private static final char[] INTERSECTION_PACKAGE_NAME = "<package intersection>".toCharArray(); //$NON-NLS-1$
 
 	public ReferenceBinding [] intersectingTypes;
 	private ReferenceBinding javaLangObject;
@@ -67,7 +68,7 @@ public class IntersectionTypeBinding18 extends ReferenceBinding {
 	}
 
 	@Override
-	protected MethodBinding[] getInterfaceAbstractContracts(Scope scope, boolean replaceWildcards, boolean filterDefaultMethods) throws InvalidInputException {
+	protected MethodBinding[] getInterfaceAbstractContracts(Scope scope, boolean replaceWildcards, boolean filterDefaultMethods) throws InvalidBindingException {
 		int typesLength = this.intersectingTypes.length;
 		MethodBinding[][] methods = new MethodBinding[typesLength][];
 		int contractsLength = 0;
@@ -224,7 +225,6 @@ public class IntersectionTypeBinding18 extends ReferenceBinding {
 							required[j] = null;
 							if (--numRequired == 0)
 								return true;
-							break;
 						}
 					}
 				}
@@ -257,8 +257,13 @@ public class IntersectionTypeBinding18 extends ReferenceBinding {
 	}
 
 	@Override
+	public char[] qualifiedPackageName() {
+		return INTERSECTION_PACKAGE_NAME;
+	}
+
+	@Override
 	public char[] qualifiedSourceName() {
-		StringBuffer qualifiedSourceName = new StringBuffer(16);
+		StringBuilder qualifiedSourceName = new StringBuilder(16);
 		for (int i = 0; i < this.length; i++) {
 				qualifiedSourceName.append(this.intersectingTypes[i].qualifiedSourceName());
 				if (i != this.length - 1)
@@ -269,7 +274,7 @@ public class IntersectionTypeBinding18 extends ReferenceBinding {
 
 	@Override
 	public char[] sourceName() {
-		StringBuffer srcName = new StringBuffer(16);
+		StringBuilder srcName = new StringBuilder(16);
 		for (int i = 0; i < this.length; i++) {
 				srcName.append(this.intersectingTypes[i].sourceName());
 				if (i != this.length - 1)
@@ -280,7 +285,7 @@ public class IntersectionTypeBinding18 extends ReferenceBinding {
 
 	@Override
 	public char[] readableName() {
-		StringBuffer readableName = new StringBuffer(16);
+		StringBuilder readableName = new StringBuilder(16);
 		for (int i = 0; i < this.length; i++) {
 				readableName.append(this.intersectingTypes[i].readableName());
 				if (i != this.length - 1)
@@ -290,7 +295,7 @@ public class IntersectionTypeBinding18 extends ReferenceBinding {
 	}
 	@Override
 	public char[] shortReadableName() {
-		StringBuffer shortReadableName = new StringBuffer(16);
+		StringBuilder shortReadableName = new StringBuilder(16);
 		for (int i = 0; i < this.length; i++) {
 				shortReadableName.append(this.intersectingTypes[i].shortReadableName());
 				if (i != this.length - 1)
@@ -308,7 +313,7 @@ public class IntersectionTypeBinding18 extends ReferenceBinding {
 	}
 	@Override
 	public String debugName() {
-		StringBuffer debugName = new StringBuffer(16);
+		StringBuilder debugName = new StringBuilder(16);
 		for (int i = 0; i < this.length; i++) {
 				debugName.append(this.intersectingTypes[i].debugName());
 				if (i != this.length - 1)
@@ -373,5 +378,10 @@ public class IntersectionTypeBinding18 extends ReferenceBinding {
 		for (TypeBinding intersectingType : this.intersectingTypes)
 			this.tagBits |= intersectingType.updateTagBits();
 		return super.updateTagBits();
+	}
+
+	@Override
+	public boolean isNonDenotable() {
+		return true;
 	}
 }

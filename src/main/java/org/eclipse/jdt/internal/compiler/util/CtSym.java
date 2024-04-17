@@ -16,6 +16,7 @@ package org.eclipse.jdt.internal.compiler.util;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.URI;
+import java.nio.channels.ClosedByInterruptException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystemAlreadyExistsException;
@@ -30,6 +31,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Stream;
 
 /**
  * Abstraction to the ct.sym file access (see https://openjdk.java.net/jeps/247). The ct.sym file is required to
@@ -73,7 +75,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * </ol>
  * <p>
  *
- * Searching a file for a given release in ct.sym means finding & traversing all possible release related directories
+ * Searching a file for a given release in ct.sym means finding and traversing all possible release related directories
  * and searching for matching path.
  */
 public class CtSym {
@@ -121,6 +123,7 @@ public class CtSym {
 		init();
 	}
 
+	@SuppressWarnings("resource") // FileSystem must not be closed
 	private void init() throws IOException {
 		boolean exists = Files.exists(this.ctSymFile);
 		if (!exists) {
@@ -197,7 +200,14 @@ public class CtSym {
 					}
 				}
 			} catch (IOException e) {
-				return Collections.emptyList();
+				String error = "Failed to init CtSym for release code " + releaseCode + " and path " + this.root; //$NON-NLS-1$ //$NON-NLS-2$
+				if (JRTUtil.PROPAGATE_IO_ERRORS) {
+					throw new IllegalStateException(error, e);
+				} else {
+					System.err.println(error);
+					e.printStackTrace();
+					return Collections.emptyList();
+				}
 			}
 			return Collections.unmodifiableList(rootDirs);
 		});
@@ -217,7 +227,6 @@ public class CtSym {
 	 *
 	 * @param releaseCode release number encoded (7,8,9,A,B...)
 	 * @param qualifiedSignatureFileName signature file name (without module)
-	 * @param moduleName
 	 * @return corresponding path in ct.sym file system or null if not found
 	 */
 	public Path getFullPath(String releaseCode, String qualifiedSignatureFileName, String moduleName) {
@@ -255,8 +264,8 @@ public class CtSym {
 			// Without this, org.eclipse.jdt.core.tests.model.ModuleBuilderTests.testConvertToModule() fails on 12+ JRE
 			path = releasePaths.get(moduleName + sep + qualifiedSignatureFileName);
 
-			// Special handling of broken module schema in java 11 for compilation with --release 10
-			if(path == null && !this.isJRE12Plus() && "A".equals(releaseCode)){ //$NON-NLS-1$
+			// Special handling of broken module schema in java 11 for compilation with --release 9 and --release 10
+			if(path == null && !this.isJRE12Plus() && ("A".equals(releaseCode) || "9".equals(releaseCode))){ //$NON-NLS-1$ //$NON-NLS-2$
 				path = releasePaths.get(qualifiedSignatureFileName);
 			}
 		} else {
@@ -297,7 +306,13 @@ public class CtSym {
 					}
 				}
 			} catch (IOException e) {
-				// not found...
+				String error = "Failed to read directory " + rroot + " contents in " + this.root; //$NON-NLS-1$ //$NON-NLS-2$
+				if (JRTUtil.PROPAGATE_IO_ERRORS) {
+					throw new IllegalStateException(error, e);
+				} else {
+					System.err.println(error);
+					e.printStackTrace();
+				}
 			}
 		}
 		return null;
@@ -321,8 +336,8 @@ public class CtSym {
 			List<Path> roots = releaseRoots(releaseCode);
 			Map<String, Path> allReleaseFiles = new HashMap<>(4999);
 			for (Path start : roots) {
-				try {
-					Files.walk(start).filter(Files::isRegularFile).forEach(p -> {
+				try (Stream<Path> fileStream=Files.walk(start)) {
+					fileStream.filter(Files::isRegularFile).forEach(p -> {
 						if (isJRE12Plus()) {
 							// Don't use module name as part of the key
 							String binaryNameWithoutModule = p.subpath(2, p.getNameCount()).toString();
@@ -336,8 +351,15 @@ public class CtSym {
 						}
 					});
 				} catch (IOException e) {
-					// Not much do to if we can't list the dir; anything in there will be treated
-					// as if it were missing.
+					String error = "Failed to read directory " + start + " contents in " + this.root; //$NON-NLS-1$ //$NON-NLS-2$
+					if (JRTUtil.PROPAGATE_IO_ERRORS) {
+						throw new IllegalStateException(error, e);
+					} else {
+						// Not much do to if we can't list the dir; anything in there will be treated
+						// as if it were missing.
+						System.err.println(error);
+						e.printStackTrace();
+					}
 				}
 			}
 			return Collections.unmodifiableMap(allReleaseFiles);
@@ -352,14 +374,18 @@ public class CtSym {
 			Optional<byte[]> bytes = this.fileCache.computeIfAbsent(path, key -> {
 				try {
 					return Optional.ofNullable(JRTUtil.safeReadBytes(key));
+				} catch (ClosedByInterruptException e) {
+					// Don't cache
+					return null;
 				} catch (IOException e) {
+					// remember there is nothing to return
 					return Optional.empty();
 				}
 			});
 			if (VERBOSE) {
 				System.out.println("got bytes: " + path); //$NON-NLS-1$
 			}
-			return bytes.orElse(null);
+			return bytes == null ? null : bytes.orElse(null);
 		}
 	}
 

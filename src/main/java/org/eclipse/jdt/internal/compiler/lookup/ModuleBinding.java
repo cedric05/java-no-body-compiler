@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2016, 2019 IBM Corporation and others.
+ * Copyright (c) 2016, 2021 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -52,7 +52,7 @@ public class ModuleBinding extends Binding implements IUpdatableModule {
 
 	/** Name of the unnamed module. */
 	public static final char[] UNNAMED = "".toCharArray(); //$NON-NLS-1$
-	/** Name to represent unnamed modules in --add-exports & --add-reads options. */
+	/** Name to represent unnamed modules in --add-exports and --add-reads options. */
 	public static final char[] ALL_UNNAMED = "ALL-UNNAMED".toCharArray(); //$NON-NLS-1$
 	/** Module name for package/type lookup that doesn't care about modules. */
 	public static final char[] ANY = "".toCharArray(); //$NON-NLS-1$
@@ -145,7 +145,7 @@ public class ModuleBinding extends Binding implements IUpdatableModule {
 	public int defaultNullness = NO_NULL_DEFAULT;
 	ModuleBinding[] requiredModules = null;
 	boolean isAuto = false;
-	private boolean[] isComplete = new boolean[UpdateKind.values().length];
+	private final boolean[] isComplete = new boolean[UpdateKind.values().length];
 	private Set<ModuleBinding> transitiveRequires;
 	SimpleLookupTable storedAnnotations = null;
 
@@ -173,7 +173,7 @@ public class ModuleBinding extends Binding implements IUpdatableModule {
 		this.requiresTransitive = Binding.NO_MODULES;
 		this.exportedPackages = Binding.NO_PLAIN_PACKAGES;
 		this.openedPackages = Binding.NO_PLAIN_PACKAGES;
-		this.declaredPackages = new HashtableOfPackage<PlainPackageBinding>();
+		this.declaredPackages = new HashtableOfPackage<>();
 		Arrays.fill(this.isComplete, true);
 	}
 	/* For error binding and sub class SourceModuleBinding. */
@@ -185,7 +185,7 @@ public class ModuleBinding extends Binding implements IUpdatableModule {
 		this.openedPackages = Binding.NO_PLAIN_PACKAGES;
 		this.uses = Binding.NO_TYPES;
 		this.services = Binding.NO_TYPES;
-		this.declaredPackages = new HashtableOfPackage<PlainPackageBinding>(5);
+		this.declaredPackages = new HashtableOfPackage<>(5);
 	}
 
 	/* For sub class BinaryModuleBinding */
@@ -194,7 +194,7 @@ public class ModuleBinding extends Binding implements IUpdatableModule {
 		this.requires = Binding.NO_MODULES;
 		this.requiresTransitive = Binding.NO_MODULES;
 		this.environment = new LookupEnvironment(existingEnvironment.root, this);
-		this.declaredPackages = new HashtableOfPackage<PlainPackageBinding>(5);
+		this.declaredPackages = new HashtableOfPackage<>(5);
 	}
 
 	public PlainPackageBinding[] getExports() {
@@ -726,7 +726,7 @@ public class ModuleBinding extends Binding implements IUpdatableModule {
 
 	@Override
 	public String toString() {
-		StringBuffer buffer = new StringBuffer(30);
+		StringBuilder buffer = new StringBuilder(30);
 		if (isOpen())
 			buffer.append("open "); //$NON-NLS-1$
 		buffer.append("module " + new String(readableName())); //$NON-NLS-1$
@@ -832,6 +832,9 @@ public class ModuleBinding extends Binding implements IUpdatableModule {
 	}
 	public boolean isUnnamed() {
 		return false;
+	}
+	public boolean isAutomatic() {
+		return this.isAuto;
 	}
 	public boolean isOpen() {
 		return (this.modifiers & ClassFileConstants.ACC_OPEN) != 0;

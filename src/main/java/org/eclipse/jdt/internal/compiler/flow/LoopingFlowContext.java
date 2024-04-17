@@ -59,7 +59,7 @@ public class LoopingFlowContext extends SwitchFlowContext {
 
 	public BranchLabel continueLabel;
 	public UnconditionalFlowInfo initsOnContinue = FlowInfo.DEAD_END;
-	private UnconditionalFlowInfo upstreamNullFlowInfo;
+	private final UnconditionalFlowInfo upstreamNullFlowInfo;
 	private LoopingFlowContext innerFlowContexts[] = null;
 	private UnconditionalFlowInfo innerFlowInfos[] = null;
 	private int innerFlowContextsCount = 0;
@@ -451,8 +451,10 @@ public void complainOnDeferredNullChecks(BlockScope scope, FlowInfo callerFlowIn
 	// propagate breaks
 	if(updateInitsOnBreak) {
 		this.initsOnBreak.addPotentialNullInfoFrom(incomingInfo);
+		this.initsOnBreak.acceptIncomingNullnessFrom(incomingInfo);
 		for (int i = 0; i < this.breakTargetsCount; i++) {
 			this.breakTargetContexts[i].initsOnBreak.addPotentialNullInfoFrom(incomingInfo);
+			this.breakTargetContexts[i].initsOnBreak.acceptIncomingNullnessFrom(incomingInfo);
 		}
 	}
 }
@@ -464,7 +466,7 @@ public void complainOnDeferredNullChecks(BlockScope scope, FlowInfo callerFlowIn
 
 	@Override
 	public String individualToString() {
-		StringBuffer buffer = new StringBuffer("Looping flow context"); //$NON-NLS-1$
+		StringBuilder buffer = new StringBuilder("Looping flow context"); //$NON-NLS-1$
 		buffer.append("[initsOnBreak - ").append(this.initsOnBreak.toString()).append(']'); //$NON-NLS-1$
 		buffer.append("[initsOnContinue - ").append(this.initsOnContinue.toString()).append(']'); //$NON-NLS-1$
 		buffer.append("[finalAssignments count - ").append(this.assignCount).append(']'); //$NON-NLS-1$

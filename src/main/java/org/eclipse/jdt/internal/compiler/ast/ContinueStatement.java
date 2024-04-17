@@ -43,6 +43,9 @@ public FlowInfo analyseCode(BlockScope currentScope, FlowContext flowContext, Fl
 			currentScope.problemReporter().undefinedLabel(this);
 		}
 		return flowInfo; // pretend it did not continue since no actual target
+	} else if (targetContext == FlowContext.NonLocalGotoThroughSwitchContext) {
+		currentScope.problemReporter().switchExpressionsContinueOutOfSwitchExpression(this);
+		return flowInfo; // pretend it did not continue since no actual target
 	}
 
 	targetContext.recordAbruptExit();
@@ -94,7 +97,7 @@ public FlowInfo analyseCode(BlockScope currentScope, FlowContext flowContext, Fl
 }
 
 @Override
-public StringBuffer printStatement(int tab, StringBuffer output) {
+public StringBuilder printStatement(int tab, StringBuilder output) {
 	printIndent(tab, output).append("continue "); //$NON-NLS-1$
 	if (this.label != null) output.append(this.label);
 	return output.append(';');

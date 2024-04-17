@@ -21,7 +21,7 @@ import org.eclipse.jdt.core.compiler.IProblem;
  */
 public class AccessRuleSet {
 
-	private AccessRule[] accessRules;
+	private final AccessRule[] accessRules;
 	public byte classpathEntryType; // one of AccessRestriction#COMMAND_LINE, LIBRARY, PROJECT
 	public String classpathEntryName;
 
@@ -117,7 +117,7 @@ public String toString() {
 }
 
 public String toString(boolean wrap) {
-	StringBuffer buffer = new StringBuffer(200);
+	StringBuilder buffer = new StringBuilder(200);
 	buffer.append("AccessRuleSet {"); //$NON-NLS-1$
 	if (wrap)
 		buffer.append('\n');

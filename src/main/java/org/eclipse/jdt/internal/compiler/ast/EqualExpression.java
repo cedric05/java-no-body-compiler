@@ -61,12 +61,11 @@ public class EqualExpression extends BinaryExpression {
 				if ((local.type.tagBits & TagBits.IsBaseType) == 0) {
 					checkVariableComparison(scope, flowContext, flowInfo, initsWhenTrue, initsWhenFalse, local, rightStatus, this.left);
 				}
-			} else if (this.left instanceof Reference
-							&& ((!contextualCheckEquality && rightStatus == FlowInfo.NULL)
-									|| (contextualCheckEquality && rightStatus == FlowInfo.NON_NULL))
-							&& scope.compilerOptions().enableSyntacticNullAnalysisForFields)
+			} else if (this.left instanceof Reference reference
+							&& ((contextualCheckEquality ? rightStatus == FlowInfo.NON_NULL : rightStatus == FlowInfo.NULL))
+							&& shouldPerformSyntacticAnalsysisFor(scope, reference))
 			{
-				FieldBinding field = ((Reference)this.left).lastFieldBinding();
+				FieldBinding field = reference.lastFieldBinding();
 				if (field != null && (field.type.tagBits & TagBits.IsBaseType) == 0) {
 					flowContext.recordNullCheckedFieldReference((Reference) this.left, 1);
 				}
@@ -78,12 +77,11 @@ public class EqualExpression extends BinaryExpression {
 				if ((local.type.tagBits & TagBits.IsBaseType) == 0) {
 					checkVariableComparison(scope, flowContext, flowInfo, initsWhenTrue, initsWhenFalse, local, leftStatus, this.right);
 				}
-			} else if (this.right instanceof Reference
-							&& ((!contextualCheckEquality && leftStatus == FlowInfo.NULL)
-									|| (contextualCheckEquality && leftStatus == FlowInfo.NON_NULL))
-							&& scope.compilerOptions().enableSyntacticNullAnalysisForFields)
+			} else if (this.right instanceof Reference reference
+							&& ((contextualCheckEquality ? leftStatus == FlowInfo.NON_NULL : leftStatus == FlowInfo.NULL))
+							&& shouldPerformSyntacticAnalsysisFor(scope, reference))
 			{
-				FieldBinding field = ((Reference)this.right).lastFieldBinding();
+				FieldBinding field = reference.lastFieldBinding();
 				if (field != null && (field.type.tagBits & TagBits.IsBaseType) == 0) {
 					flowContext.recordNullCheckedFieldReference((Reference) this.right, 1);
 				}
@@ -97,6 +95,43 @@ public class EqualExpression extends BinaryExpression {
 				initsWhenTrue.setReachMode(FlowInfo.UNREACHABLE_BY_NULLANALYSIS);
 			} else {
 				initsWhenFalse.setReachMode(FlowInfo.UNREACHABLE_BY_NULLANALYSIS);
+			}
+		}
+	}
+	boolean shouldPerformSyntacticAnalsysisFor(Scope scope, Reference reference) {
+		CompilerOptions compilerOptions = scope.compilerOptions();
+		if (compilerOptions.enableSyntacticNullAnalysisForFields)
+			return true;
+		if (compilerOptions.isAnnotationBasedResourceAnalysisEnabled && (reference.bits & Binding.FIELD) != 0) {
+			// annotation based resource leak analysis implicitly "borrows" from syntactic analysis for fields
+			// in order to understand the pattern "if (this.resource != null) this.resource.close();"
+			FieldBinding fieldBinding = reference.fieldBinding();
+			if (fieldBinding != null && fieldBinding.closeTracker != null)
+				return true;
+		}
+		return false;
+	}
+	public void syntacticFieldAnalysisForFalseBranch(FlowInfo flowInfo, FlowContext flowContext) {
+		// extracted slice of checkNullComparison concerning syntactic null analysis for fields:
+		// now compute the effect on the false branch and record it in flowContext:
+		int rightStatus = this.right.nullStatus(flowInfo, flowContext);
+		if (rightStatus == FlowInfo.NULL
+				&& this.left instanceof Reference
+				&& this.left.localVariableBinding() == null)
+		{
+			FieldBinding field = ((Reference)this.left).lastFieldBinding();
+			if (field != null && (field.type.tagBits & TagBits.IsBaseType) == 0) {
+				flowContext.recordNullCheckedFieldReference((Reference) this.left, 1);
+			}
+		}
+		int leftStatus = this.left.nullStatus(flowInfo, flowContext);
+		if (leftStatus == FlowInfo.NULL
+				&& this.right instanceof Reference
+				&& this.right.localVariableBinding() == null)
+		{
+			FieldBinding field = ((Reference)this.right).lastFieldBinding();
+			if (field != null && (field.type.tagBits & TagBits.IsBaseType) == 0) {
+				flowContext.recordNullCheckedFieldReference((Reference) this.right, 1);
 			}
 		}
 	}
@@ -464,7 +499,6 @@ public class EqualExpression extends BinaryExpression {
 	}
 	/**
 	 * Boolean generation for == with non-boolean operands
-	 *
 	 */
 	public void generateNonBooleanEqual(BlockScope currentScope, CodeStream codeStream, boolean valueRequired) {
 
@@ -673,7 +707,6 @@ public class EqualExpression extends BinaryExpression {
 
 	/**
 	 * Boolean generation for == with non-boolean operands
-	 *
 	 */
 	public void generateOptimizedNonBooleanEqual(BlockScope currentScope, CodeStream codeStream, BranchLabel trueLabel, BranchLabel falseLabel, boolean valueRequired) {
 

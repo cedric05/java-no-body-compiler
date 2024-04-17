@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2016, 2020 Google, Inc. and others.
+ * Copyright (c) 2016, 2023 Google, Inc. and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -18,6 +18,7 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -38,7 +39,7 @@ import org.eclipse.jdt.internal.compiler.lookup.TypeConstants;
  * result of {@link #enrichWithExternalAnnotationsFor} or {@link #getExternalAnnotationStatus}.
  */
 public class ExternalAnnotationDecorator implements IBinaryType {
-	private IBinaryType inputType;
+	private final IBinaryType inputType;
 	private ExternalAnnotationProvider annotationProvider;
 	private boolean isFromSource;
 
@@ -195,6 +196,7 @@ public class ExternalAnnotationDecorator implements IBinaryType {
 	 *             basePath is a directory <em>is</em> expected, and simply answered with null. If basePath is neither a
 	 *             directory nor a zip file, this is unexpected.
 	 */
+	@SuppressWarnings("resource")
 	public static ZipFile getAnnotationZipFile(String basePath, ZipFileProducer producer) throws IOException {
 		File annotationBase = new File(basePath);
 		if (!annotationBase.isFile()) {
@@ -226,8 +228,8 @@ public class ExternalAnnotationDecorator implements IBinaryType {
 			File annotationBase = new File(basePath);
 			if (annotationBase.isDirectory()) {
 				String filePath = annotationBase.getAbsolutePath() + '/' + qualifiedBinaryFileName;
-				try {
-					return new ExternalAnnotationProvider(new FileInputStream(filePath), qualifiedBinaryTypeName);
+				try (FileInputStream input = new FileInputStream(filePath)) {
+					return new ExternalAnnotationProvider(input, qualifiedBinaryTypeName);
 				} catch (FileNotFoundException e) {
 					// Expected, no need to report an error here
 					return null;
@@ -309,4 +311,8 @@ public class ExternalAnnotationDecorator implements IBinaryType {
 		return ExternalAnnotationStatus.TYPE_IS_ANNOTATED;
 	}
 
+	@Override
+	public URI getURI() {
+		return this.inputType.getURI();
+	}
 }

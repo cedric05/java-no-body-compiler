@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2021 IBM Corporation and others.
+ * Copyright (c) 2000, 2023 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -168,6 +168,8 @@ public class ConstantPool implements ClassFileConstants, TypeIds {
 	public static final char[] JavaLangEnumConstantPoolName = "java/lang/Enum".toCharArray(); //$NON-NLS-1$
 	public static final char[] JavaLangErrorConstantPoolName = "java/lang/Error".toCharArray(); //$NON-NLS-1$
 	public static final char[] JavaLangIncompatibleClassChangeErrorConstantPoolName = "java/lang/IncompatibleClassChangeError".toCharArray(); //$NON-NLS-1$
+	public static final char[] JavaLangMatchExceptionConstantPoolName = "java/lang/MatchException".toCharArray(); //$NON-NLS-1$
+	public static final char[] JavaLangMatchExceptionNewInstanceSignature = "(Ljava/lang/String;Ljava/lang/Throwable;)V".toCharArray(); //$NON-NLS-1$
 	public static final char[] JavaLangExceptionConstantPoolName = "java/lang/Exception".toCharArray(); //$NON-NLS-1$
 	public static final char[] JavaLangFloatConstantPoolName = "java/lang/Float".toCharArray(); //$NON-NLS-1$
 	public static final char[] JavaLangIntegerConstantPoolName = "java/lang/Integer".toCharArray(); //$NON-NLS-1$
@@ -192,6 +194,7 @@ public class ConstantPool implements ClassFileConstants, TypeIds {
 	public static final char[] JavaLangIllegalArgumentExceptionConstantPoolName = "java/lang/IllegalArgumentException".toCharArray(); //$NON-NLS-1$
 	public static final char[] JavaLangVoidConstantPoolName = "java/lang/Void".toCharArray(); //$NON-NLS-1$
 	public static final char[] JavaUtilIteratorConstantPoolName = "java/util/Iterator".toCharArray(); //$NON-NLS-1$
+	public static final char[] JavaUtilObjectsConstantPoolName = "java/util/Objects".toCharArray(); //$NON-NLS-1$
 	public static final char[] LongConstrSignature = "(J)V".toCharArray(); //$NON-NLS-1$
 	public static final char[] longLongSignature = "(J)Ljava/lang/Long;".toCharArray(); //$NON-NLS-1$
 	public static final char[] LONGVALUE_LONG_METHOD_NAME = "longValue".toCharArray(); //$NON-NLS-1$
@@ -206,6 +209,8 @@ public class ConstantPool implements ClassFileConstants, TypeIds {
 	public static final char[] Ordinal = "ordinal".toCharArray(); //$NON-NLS-1$
 	public static final char[] OrdinalSignature = "()I".toCharArray(); //$NON-NLS-1$
 	public static final char[] Out = "out".toCharArray(); //$NON-NLS-1$
+	public static final char[] RequireNonNull = "requireNonNull".toCharArray();//$NON-NLS-1$
+	public static final char[] RequireNonNullSignature = "(Ljava/lang/Object;)Ljava/lang/Object;".toCharArray();//$NON-NLS-1$
 	public static final char[] SET_BOOLEAN_METHOD_NAME = "setBoolean".toCharArray(); //$NON-NLS-1$
 	public static final char[] SET_BOOLEAN_METHOD_SIGNATURE = "(Ljava/lang/Object;Z)V".toCharArray(); //$NON-NLS-1$
 	public static final char[] SET_BYTE_METHOD_NAME = "setByte".toCharArray(); //$NON-NLS-1$
@@ -308,7 +313,23 @@ public class ConstantPool implements ClassFileConstants, TypeIds {
 	public static final char[] CloneSignature = "()Ljava/lang/Object;".toCharArray(); //$NON-NLS-1$
 	public static final char[] BOOTSTRAP = "bootstrap".toCharArray(); //$NON-NLS-1$
 	public static final char[] JAVA_LANG_RUNTIME_OBJECTMETHOD_BOOTSTRAP_SIGNATURE = "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/TypeDescriptor;Ljava/lang/Class;Ljava/lang/String;[Ljava/lang/invoke/MethodHandle;)Ljava/lang/Object;".toCharArray(); //$NON-NLS-1$
-	public static final char[] JDK_INTERNAL_PREVIEW_FEATURE = "Ljdk/internal/PreviewFeature;".toCharArray(); //$NON-NLS-1$
+	public static final char[] PREVIEW_FEATURE = "/PreviewFeature".toCharArray(); //$NON-NLS-1$
+	public static final char[] TYPESWITCH = "typeSwitch".toCharArray(); //$NON-NLS-1$
+	public static final char[] ENUMSWITCH = "enumSwitch".toCharArray(); //$NON-NLS-1$
+	public static final char[] JAVA_LANG_RUNTIME_SWITCHBOOTSTRAPS_SWITCH_SIGNATURE = "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;".toCharArray(); //$NON-NLS-1$
+	public static final char[] ConcatWithConstants = "makeConcatWithConstants".toCharArray(); //$NON-NLS-1$
+	public static final char[] JAVA_LANG_INVOKE_STRING_CONCAT_FACTORY_SIGNATURE =
+			"(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;".toCharArray(); //$NON-NLS-1$
+	public static final char[] JAVA_LANG_ENUM_ENUMDESC = "Ljava/lang/Enum$EnumDesc;".toCharArray(); //$NON-NLS-1$
+	public static final char[] JAVA_LANG_CONST_CLASSDESC = "Ljava/lang/constant/ClassDesc;".toCharArray(); //$NON-NLS-1$
+	public static final char[] JAVA_LANG_INVOKE_CONSTANTBOOTSTRAP_SIGNATURE =
+			"(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/Class;Ljava/lang/invoke/MethodHandle;[Ljava/lang/Object;)Ljava/lang/Object;".toCharArray(); //$NON-NLS-1$
+	public static final char[] JAVA_LANG_ENUMDESC_OF_SIGNATURE = "(Ljava/lang/constant/ClassDesc;Ljava/lang/String;)Ljava/lang/Enum$EnumDesc;".toCharArray(); //$NON-NLS-1$
+	public static final char[] JAVA_LANG_CLASSDESC_OF_SIGNATURE = "(Ljava/lang/String;)Ljava/lang/constant/ClassDesc;".toCharArray(); //$NON-NLS-1$
+	public static final char[] JAVA_LANG_RUNTIME_STRING_TEMPLATE_SIGNATURE =
+			"(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;[Ljava/lang/String;)Ljava/lang/invoke/CallSite;".toCharArray(); //$NON-NLS-1$
+
+	public static final char[] PROCESS = "process".toCharArray(); //$NON-NLS-1$
 
 	/**
 	 * ConstantPool constructor comment.

@@ -18,7 +18,7 @@ package org.eclipse.jdt.internal.compiler.classfmt;
 import org.eclipse.jdt.internal.compiler.env.IBinaryAnnotation;
 
 class MethodInfoWithParameterAnnotations extends MethodInfoWithAnnotations {
-	private AnnotationInfo[][] parameterAnnotations;
+	private final AnnotationInfo[][] parameterAnnotations;
 
 MethodInfoWithParameterAnnotations(MethodInfo methodInfo, AnnotationInfo[] annotations, AnnotationInfo[][] parameterAnnotations) {
 	super(methodInfo, annotations);
@@ -30,7 +30,7 @@ public IBinaryAnnotation[] getParameterAnnotations(int index, char[] classFileNa
 		return this.parameterAnnotations == null ? null : this.parameterAnnotations[index];
 	} catch (ArrayIndexOutOfBoundsException aioobe) {
 		// detailed reporting to track down https://bugs.eclipse.org/474081
-		StringBuffer message = new StringBuffer("Mismatching number of parameter annotations, "); //$NON-NLS-1$
+		StringBuilder message = new StringBuilder("Mismatching number of parameter annotations, "); //$NON-NLS-1$
 		message.append(index);
 		message.append('>');
 		message.append(this.parameterAnnotations.length-1);

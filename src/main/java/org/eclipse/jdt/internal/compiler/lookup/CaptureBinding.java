@@ -108,7 +108,7 @@ public class CaptureBinding extends TypeVariableBinding {
 	 */
 	@Override
 	public char[] computeUniqueKey(boolean isLeaf) {
-		StringBuffer buffer = new StringBuffer();
+		StringBuilder buffer = new StringBuilder();
 		if (isLeaf) {
 			buffer.append(this.sourceType.computeUniqueKey(false/*not a leaf*/));
 			buffer.append('&');
@@ -127,7 +127,7 @@ public class CaptureBinding extends TypeVariableBinding {
 	public String debugName() {
 
 		if (this.wildcard != null) {
-			StringBuffer buffer = new StringBuffer(10);
+			StringBuilder buffer = new StringBuilder(10);
 			AnnotationBinding [] annotations = getTypeAnnotations();
 			for (int i = 0, length = annotations == null ? 0 : annotations.length; i < length; i++) {
 				buffer.append(annotations[i]);
@@ -160,8 +160,8 @@ public class CaptureBinding extends TypeVariableBinding {
 	}
 
 	/**
-	 * Initialize capture bounds using substituted supertypes
-	 * e.g. given X<U, V extends X<U, V>>,     capture(X<E,?>) = X<E,capture>, where capture extends X<E,capture>
+	 * Initialize capture bounds using substituted supertypes e.g. given
+	 * {@code X<U, V extends X<U, V>>, capture(X<E,?>) = X<E,capture>,} where {@code capture extends X<E,capture>}
 	 */
 	public void initializeBounds(Scope scope, ParameterizedTypeBinding capturedParameterizedType) {
 		boolean is18plus = scope.compilerOptions().complianceLevel >= ClassFileConstants.JDK1_8;
@@ -263,6 +263,12 @@ public class CaptureBinding extends TypeVariableBinding {
 			case Wildcard.UNBOUND :
 				this.setSuperClass(substitutedVariableSuperclass);
 				this.setSuperInterfaces(substitutedVariableInterfaces);
+				if (substitutedVariableSuperclass != null && substitutedVariableInterfaces != null) {
+					if (substitutedVariableSuperclass.id == TypeIds.T_JavaLangObject
+							&& substitutedVariableInterfaces.length > 0) {
+						this.setFirstBound(substitutedVariableInterfaces[0]);
+					}
+				}
 				this.tagBits &= ~TagBits.HasTypeVariable;
 				break;
 			case Wildcard.SUPER :
@@ -287,6 +293,8 @@ public class CaptureBinding extends TypeVariableBinding {
 				for (int i = 0; i < mentionedTypeVariables.length; ++i) {
 					if (TypeBinding.equalsEquals(this, mentionedTypeVariables[i])) {
 						TypeBinding upperBoundForProjection = this.upperBoundForProjection();
+						if (upperBoundForProjection == null)
+							upperBoundForProjection = scope.getJavaLangObject();
 						return ((ReferenceBinding)upperBoundForProjection).upwardsProjection(scope, mentionedTypeVariables);
 					}
 				}
@@ -384,7 +392,7 @@ public class CaptureBinding extends TypeVariableBinding {
 	@Override
 	public char[] readableName() {
 		if (this.wildcard != null) {
-			StringBuffer buffer = new StringBuffer(10);
+			StringBuilder buffer = new StringBuilder(10);
 			buffer
 				.append(TypeConstants.WILDCARD_CAPTURE_NAME_PREFIX)
 				.append(this.captureID)
@@ -401,7 +409,7 @@ public class CaptureBinding extends TypeVariableBinding {
 	@Override
 	public char[] signableName() {
 		if (this.wildcard != null) {
-			StringBuffer buffer = new StringBuffer(10);
+			StringBuilder buffer = new StringBuilder(10);
 			buffer
 				.append(TypeConstants.WILDCARD_CAPTURE_SIGNABLE_NAME_SUFFIX)
 				.append(this.wildcard.readableName());
@@ -416,7 +424,7 @@ public class CaptureBinding extends TypeVariableBinding {
 	@Override
 	public char[] shortReadableName() {
 		if (this.wildcard != null) {
-			StringBuffer buffer = new StringBuffer(10);
+			StringBuilder buffer = new StringBuilder(10);
 			buffer
 				.append(TypeConstants.WILDCARD_CAPTURE_NAME_PREFIX)
 				.append(this.captureID)
@@ -432,7 +440,7 @@ public class CaptureBinding extends TypeVariableBinding {
 
 	@Override
 	public char[] nullAnnotatedReadableName(CompilerOptions options, boolean shortNames) {
-	    StringBuffer nameBuffer = new StringBuffer(10);
+	    StringBuilder nameBuffer = new StringBuilder(10);
 		appendNullAnnotation(nameBuffer, options);
 		nameBuffer.append(this.sourceName());
 		if (!this.inRecursiveFunction) { // CaptureBinding18 can be recursive indeed
@@ -569,7 +577,7 @@ public class CaptureBinding extends TypeVariableBinding {
 	@Override
 	public String toString() {
 		if (this.wildcard != null) {
-			StringBuffer buffer = new StringBuffer(10);
+			StringBuilder buffer = new StringBuilder(10);
 			AnnotationBinding [] annotations = getTypeAnnotations();
 			for (int i = 0, length = annotations == null ? 0 : annotations.length; i < length; i++) {
 				buffer.append(annotations[i]);

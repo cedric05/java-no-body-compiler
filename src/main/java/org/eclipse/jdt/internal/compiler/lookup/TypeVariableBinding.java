@@ -247,6 +247,17 @@ public class TypeVariableBinding extends ReferenceBinding {
 					break;
 			}
 			return BoundCheckStatus.OK;
+		} else if (checkNullAnnotations && argumentType.kind() == Binding.TYPE_PARAMETER && !argumentType.hasNullTypeAnnotations()) {
+			// refresh argumentType in case a nullness default(TYPE_PARAMETER) was applied late:
+			TypeVariableBinding tvb = (TypeVariableBinding) argumentType;
+			if (tvb.declaringElement instanceof SourceTypeBinding) {
+				TypeVariableBinding[] typeVariables = ((SourceTypeBinding) tvb.declaringElement).typeVariables;
+				if (typeVariables != null && typeVariables.length > tvb.rank) {
+					TypeVariableBinding refreshed = typeVariables[tvb.rank];
+					if (refreshed.id == argumentType.id)
+						argumentType = refreshed;
+				}
+			}
 		}
 		boolean unchecked = false;
 		if (this.superclass.id != TypeIds.T_JavaLangObject) {
@@ -328,11 +339,13 @@ public class TypeVariableBinding extends ReferenceBinding {
 	}
 	/**
 	 * Collect the substitutes into a map for certain type variables inside the receiver type
-	 * e.g.   Collection<T>.collectSubstitutes(Collection<List<X>>, Map), will populate Map with: T --> List<X>
+	 * e.g. {@code Collection<T>.collectSubstitutes(Collection<List<X>>, Map)} will populate Map with: {@code T --> List<X>}
+	 * <pre>{@code
 	 * Constraints:
 	 *   A << F   corresponds to:   F.collectSubstitutes(..., A, ..., CONSTRAINT_EXTENDS (1))
-	 *   A = F   corresponds to:      F.collectSubstitutes(..., A, ..., CONSTRAINT_EQUAL (0))
+	 *   A = F    corresponds to:   F.collectSubstitutes(..., A, ..., CONSTRAINT_EQUAL (0))
 	 *   A >> F   corresponds to:   F.collectSubstitutes(..., A, ..., CONSTRAINT_SUPER (2))
+	 * }</pre>
 	 */
 	@Override
 	public void collectSubstitutes(Scope scope, TypeBinding actualType, InferenceContext inferenceContext, int constraint) {
@@ -377,7 +390,7 @@ public class TypeVariableBinding extends ReferenceBinding {
 	 */
 	@Override
 	public char[] computeUniqueKey(boolean isLeaf) {
-		StringBuffer buffer = new StringBuffer();
+		StringBuilder buffer = new StringBuilder();
 		Binding declaring = this.declaringElement;
 		if (!isLeaf && declaring.kind() == Binding.METHOD) { // see https://bugs.eclipse.org/bugs/show_bug.cgi?id=97902
 			MethodBinding methodBinding = (MethodBinding) declaring;
@@ -417,7 +430,7 @@ public class TypeVariableBinding extends ReferenceBinding {
 	}
 	@Override
 	public String annotatedDebugName() {
-		StringBuffer buffer = new StringBuffer(10);
+		StringBuilder buffer = new StringBuilder(10);
 		buffer.append(super.annotatedDebugName());
 		if (!this.inRecursiveFunction) {
 			this.inRecursiveFunction = true;
@@ -458,12 +471,13 @@ public class TypeVariableBinding extends ReferenceBinding {
 	    }
 	    return this.superclass; // java/lang/Object
 	}
-	/**
+	/**<pre>{@code
 	 * T::Ljava/util/Map;:Ljava/io/Serializable;
 	 * T:LY<TT;>
+	 * }</pre>
 	 */
 	public char[] genericSignature() {
-	    StringBuffer sig = new StringBuffer(10);
+	    StringBuilder sig = new StringBuilder(10);
 	    sig.append(this.sourceName).append(':');
 	   	int interfaceLength = this.superInterfaces == null ? 0 : this.superInterfaces.length;
 	    if (interfaceLength == 0 || TypeBinding.equalsEquals(this.firstBound, this.superclass)) {
@@ -478,9 +492,10 @@ public class TypeVariableBinding extends ReferenceBinding {
 		sig.getChars(0, sigLength, genericSignature, 0);
 		return genericSignature;
 	}
-	/**
+	/**<pre>{@code
 	 * T::Ljava/util/Map;:Ljava/io/Serializable;
 	 * T:LY<TT;>
+	 * }</pre>
 	 */
 	@Override
 	public char[] genericTypeSignature() {
@@ -551,9 +566,8 @@ public class TypeVariableBinding extends ReferenceBinding {
 	}
 
 	/**
-	 * Returns true if the 2 variables are playing exact same role: they have
-	 * the same bounds, providing one is substituted with the other: <T1 extends
-	 * List<T1>> is interchangeable with <T2 extends List<T2>>.
+	 * Returns true if the 2 variables are playing exact same role: they have the same bounds, providing one is
+	 * substituted with the other: {@code <T1 extends List<T1>>} is interchangeable with {@code <T2 extends List<T2>>}.
 	 */
 	public boolean isInterchangeableWith(TypeVariableBinding otherVariable, Substitution substitute) {
 		if (TypeBinding.equalsEquals(this, otherVariable))
@@ -868,7 +882,7 @@ public class TypeVariableBinding extends ReferenceBinding {
 	public String toString() {
 		if (this.hasTypeAnnotations())
 			return annotatedDebugName();
-		StringBuffer buffer = new StringBuffer(10);
+		StringBuilder buffer = new StringBuilder(10);
 		buffer.append('<').append(this.sourceName);//.append('[').append(this.rank).append(']');
 		if (this.superclass != null && TypeBinding.equalsEquals(this.firstBound, this.superclass)) {
 		    buffer.append(" extends ").append(this.superclass.debugName()); //$NON-NLS-1$
@@ -890,7 +904,7 @@ public class TypeVariableBinding extends ReferenceBinding {
 
 	@Override
 	public char[] nullAnnotatedReadableName(CompilerOptions options, boolean shortNames) {
-	    StringBuffer nameBuffer = new StringBuffer(10);
+	    StringBuilder nameBuffer = new StringBuilder(10);
 		appendNullAnnotation(nameBuffer, options);
 		nameBuffer.append(this.sourceName());
 		if (!this.inRecursiveFunction) {
@@ -921,7 +935,7 @@ public class TypeVariableBinding extends ReferenceBinding {
 	}
 
 	@Override
-	protected void appendNullAnnotation(StringBuffer nameBuffer, CompilerOptions options) {
+	protected void appendNullAnnotation(StringBuilder nameBuffer, CompilerOptions options) {
 		int oldSize = nameBuffer.length();
 		super.appendNullAnnotation(nameBuffer, options);
 		if (oldSize == nameBuffer.length()) { // nothing appended in super.appendNullAnnotation()?

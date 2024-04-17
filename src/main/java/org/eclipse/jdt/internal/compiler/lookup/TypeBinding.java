@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2020 IBM Corporation and others.
+ * Copyright (c) 2000, 2023 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -136,6 +136,8 @@ public static final TypeBinding wellKnownType(Scope scope, int id) {
 		return scope.getJavaLangObject();
 	case TypeIds.T_JavaLangString:
 		return scope.getJavaLangString();
+	case TypeIds.T_JavaLangThrowable:
+		return scope.getJavaLangThrowable();
 	default:
 		return null;
 	}
@@ -173,7 +175,7 @@ TypeBinding [] additionalBounds() {
 
 public String annotatedDebugName() {
 	TypeBinding enclosingType = enclosingType();
-	StringBuffer buffer = new StringBuffer(16);
+	StringBuilder buffer = new StringBuilder(16);
 	if (enclosingType != null) {
 		buffer.append(enclosingType.annotatedDebugName());
 		buffer.append('.');
@@ -233,7 +235,6 @@ public TypeBinding closestMatch() {
 
 /**
  * Iterate through the type components to collect instances of leaf missing types
- * @param missingTypes
  * @return missing types
  */
 public List<TypeBinding> collectMissingTypes(List<TypeBinding> missingTypes) {
@@ -242,11 +243,14 @@ public List<TypeBinding> collectMissingTypes(List<TypeBinding> missingTypes) {
 
 /**
  * Collect the substitutes into a map for certain type variables inside the receiver type
- * e.g.   Collection<T>.findSubstitute(T, Collection<List<X>>):   T --> List<X>
+ * e.g.<pre>{@code
+ * Collection<T>.findSubstitute(T, Collection<List<X>>):   T --> List<X>
+ *
  * Constraints:
  *   A << F   corresponds to:   F.collectSubstitutes(..., A, ..., CONSTRAINT_EXTENDS (1))
- *   A = F   corresponds to:      F.collectSubstitutes(..., A, ..., CONSTRAINT_EQUAL (0))
+ *   A = F    corresponds to:   F.collectSubstitutes(..., A, ..., CONSTRAINT_EQUAL (0))
  *   A >> F   corresponds to:   F.collectSubstitutes(..., A, ..., CONSTRAINT_SUPER (2))
+ * }</pre>
  */
 public void collectSubstitutes(Scope scope, TypeBinding actualType, InferenceContext inferenceContext, int constraint) {
 	// no substitute by default
@@ -304,7 +308,7 @@ public TypeBinding erasure() {
  * Perform an upwards type projection as per JLS 4.10.5
  * @param scope Relevant scope for evaluating type projection
  * @param mentionedTypeVariables Filter for mentioned type variabled
- * @returns Upwards type projection of 'this', or null if downwards projection is undefined
+ * @return Upwards type projection of 'this', or null if downwards projection is undefined
 */
 public TypeBinding upwardsProjection(Scope scope, TypeBinding[] mentionedTypeVariables) {
 	return this;
@@ -314,7 +318,7 @@ public TypeBinding upwardsProjection(Scope scope, TypeBinding[] mentionedTypeVar
  * Perform a downwards type projection as per JLS 4.10.5
  * @param scope Relevant scope for evaluating type projection
  * @param mentionedTypeVariables Filter for mentioned type variabled
- * @returns Downwards type projection of 'this', or null if downwards projection is undefined
+ * @return Downwards type projection of 'this', or null if downwards projection is undefined
 */
 public TypeBinding downwardsProjection(Scope scope, TypeBinding[] mentionedTypeVariables) {
 	return this;
@@ -519,7 +523,7 @@ public TypeBinding genericCast(TypeBinding targetType) {
 
 /**
  * Answer the receiver classfile signature.
- * Arrays & base types do not distinguish between signature() & constantPoolName().
+ * Arrays and base types do not distinguish between signature() and constantPoolName().
  * NOTE: This method should only be used during/after code gen.
  */
 public char[] genericTypeSignature() {
@@ -652,7 +656,7 @@ public boolean isBoxedPrimitiveType() {
 }
 
 /**
- *  Returns true if parameterized type AND not of the form List<?>
+ *  Returns true if parameterized type AND not of the form {@code List<?>}
  */
 public boolean isBoundParameterizedType() {
 	return false;
@@ -746,7 +750,7 @@ public boolean isFunctionalInterface(Scope scope) {
 }
 
 /**
- * Returns true if the current type denotes an intersection type: Number & Comparable<?>
+ * Returns true if the current type denotes an intersection type: Number and {@code Comparable<?>}
  */
 public boolean isIntersectionType() {
 	return false;
@@ -780,7 +784,7 @@ public final boolean isNumericType() {
 }
 
 /**
- * Returns true if the type is parameterized, e.g. List<String>.
+ * Returns true if the type is parameterized, e.g. {@code List<String>}.
  * Note that some instances of ParameterizedTypeBinding have no arguments, like for non-generic members
  * of a parameterized type. Use {@link #isParameterizedTypeWithActualArguments()} instead to find out.
  */
@@ -808,7 +812,7 @@ public boolean isIntersectionType18() {
 }
 
 /**
- * Returns true if the type is parameterized, e.g. List<String>
+ * Returns true if the type is parameterized, e.g. {@code List<String>}.
  * Note that some instances of ParameterizedTypeBinding do answer false to {@link #isParameterizedType()}
  * in case they have no arguments, like for non-generic members of a parameterized type.
  * i.e. {@link #isParameterizedType()} is not equivalent to testing <code>type.kind() == Binding.PARAMETERIZED_TYPE</code>
@@ -1173,6 +1177,9 @@ private boolean isProvablyDistinctTypeArgument(TypeBinding otherArgument, final 
 	}
 }
 
+public boolean isReadyForAnnotations() {
+	return true;
+}
 /**
  * Answer true if the receiver is an annotation which may be repeatable. Overridden as appropriate.
  */
@@ -1185,7 +1192,7 @@ public final boolean isRawType() {
 }
 /**
  * JLS(3) 4.7.
- * Note: Foo<?>.Bar is also reifiable
+ * Note: {@code Foo<?>.Bar} is also reifiable
  */
 public boolean isReifiable() {
 	TypeBinding leafType = leafComponentType();
@@ -1577,7 +1584,7 @@ public char[] qualifiedPackageName() {
 /**
  * Answer the source name for the type.
  * In the case of member types, as the qualified name from its top level type.
- * For example, for a member type N defined inside M & A: "A.M.N".
+ * For example, for a member type N defined inside {@code M & A: "A.M.N"}.
  */
 
 public abstract char[] qualifiedSourceName();
@@ -1615,7 +1622,7 @@ public char [] signableName() {
 
 /**
  * Answer the receiver classfile signature.
- * Arrays & base types do not distinguish between signature() & constantPoolName().
+ * Arrays and base types do not distinguish between signature() and constantPoolName().
  * NOTE: This method should only be used during/after code gen.
  */
 public char[] signature() {
@@ -1733,7 +1740,9 @@ public ReferenceBinding[] permittedTypes() {
 public ReferenceBinding[] superInterfaces() {
 	return Binding.NO_SUPERINTERFACES;
 }
-
+public RecordComponentBinding[] components() {
+	return Binding.NO_COMPONENTS;
+}
 public SyntheticArgumentBinding[] syntheticOuterLocalVariables() {
 	return null;		// is null if no enclosing instances are required
 }
@@ -1765,4 +1774,12 @@ public long updateTagBits() {
 public boolean isFreeTypeVariable() {
 	return false;
 }
+
+/**
+ * Does this type lack a class file representation on its own ?
+ */
+public boolean isNonDenotable() {
+	return false;
+}
+
 }

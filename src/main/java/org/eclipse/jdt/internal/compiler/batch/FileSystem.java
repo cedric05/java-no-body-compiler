@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2019 IBM Corporation and others.
+ * Copyright (c) 2000, 2021 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -18,6 +18,7 @@ package org.eclipse.jdt.internal.compiler.batch;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.InvalidPathException;
+import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -120,13 +121,12 @@ public class FileSystem implements IModuleAwareNameEnvironment, SuffixConstants 
 		boolean hasAnnotationFileFor(String qualifiedTypeName);
 		/**
 		 * Accepts to represent a module location with the given module description.
-		 *
-		 * @param module
 		 */
 		public void acceptModule(IModule module);
 		public String getDestinationPath();
 		Collection<String> getModuleNames(Collection<String> limitModules);
 		Collection<String> getModuleNames(Collection<String> limitModules, Function<String,IModule> getModule);
+		default boolean forbidsExportFrom(String modName) { return false; }
 	}
 	public interface ClasspathSectionProblemReporter {
 		void invalidClasspathSection(String jarFilePath);
@@ -188,22 +188,34 @@ public class FileSystem implements IModuleAwareNameEnvironment, SuffixConstants 
 	initialFileNames is a collection is Strings, the trailing '.java' will be removed if its not already.
 */
 public FileSystem(String[] classpathNames, String[] initialFileNames, String encoding) {
-	this(classpathNames, initialFileNames, encoding, null);
+	this(classpathNames, initialFileNames, encoding, null, null);
+}
+public FileSystem(String[] classpathNames, String[] initialFileNames, String encoding, String release) {
+	this(classpathNames, initialFileNames, encoding, null, release);
 }
 protected FileSystem(String[] classpathNames, String[] initialFileNames, String encoding, Collection<String> limitModules) {
+	this(classpathNames,initialFileNames, encoding, limitModules, null);
+}
+protected FileSystem(String[] classpathNames, String[] initialFileNames, String encoding, Collection<String> limitModules, String release) {
 	final int classpathSize = classpathNames.length;
 	this.classpaths = new Classpath[classpathSize];
 	int counter = 0;
 	this.hasLimitModules = limitModules != null && !limitModules.isEmpty();
 	for (int i = 0; i < classpathSize; i++) {
-		Classpath classpath = getClasspath(classpathNames[i], encoding, null, null, null);
+		Classpath classpath = getClasspath(classpathNames[i], encoding, null, null, release);
 		try {
 			classpath.initialize();
 			for (String moduleName : classpath.getModuleNames(limitModules))
 				this.moduleLocations.put(moduleName, classpath);
 			this.classpaths[counter++] = classpath;
 		} catch (IOException e) {
-			// ignore
+			String error = "Failed to init " + classpath; //$NON-NLS-1$
+			if (JRTUtil.PROPAGATE_IO_ERRORS) {
+				throw new IllegalStateException(error, e);
+			} else {
+				System.err.println(error);
+				e.printStackTrace();
+			}
 		}
 	}
 	if (counter != classpathSize) {
@@ -223,9 +235,20 @@ protected FileSystem(Classpath[] paths, String[] initialFileNames, boolean annot
 			for (String moduleName : classpath.getModuleNames(limitedModules))
 				this.moduleLocations.put(moduleName, classpath);
 			this.classpaths[counter++] = classpath;
-		} catch(IOException | InvalidPathException exception) {
+		} catch(InvalidPathException exception) {
 			// JRE 9 could throw an IAE if the linked JAR paths have invalid chars, such as ":"
 			// ignore
+		} catch (NoSuchFileException e) {
+			// we don't warn about inexisting jars (javac does the same as us)
+			// see org.eclipse.jdt.core.tests.compiler.regression.BatchCompilerTest.test017b()
+		} catch (IOException e) {
+			String error = "Failed to init " + classpath; //$NON-NLS-1$
+			if (JRTUtil.PROPAGATE_IO_ERRORS) {
+				throw new IllegalStateException(error, e);
+			} else {
+				System.err.println(error);
+				e.printStackTrace();
+			}
 		}
 	}
 	if (counter != length) {
@@ -356,10 +379,10 @@ private void initializeKnownFileNames(String[] initialFileNames) {
 		CharOperation.replace(fileName, '\\', '/');
 		boolean globalPathMatches = false;
 		// the most nested path should be the selected one
-		for (int j = 0, max = this.classpaths.length; j < max; j++) {
-			char[] matchCandidate = this.classpaths[j].normalizedPath();
+		for (Classpath classpath : this.classpaths) {
+			char[] matchCandidate = classpath.normalizedPath();
 			boolean currentPathMatch = false;
-			if (this.classpaths[j] instanceof ClasspathDirectory
+			if (classpath instanceof ClasspathDirectory
 					&& CharOperation.prefixEquals(matchCandidate, fileName)) {
 				currentPathMatch = true;
 				if (matchingPathName == null) {
@@ -410,6 +433,7 @@ private static String convertPathSeparators(String path) {
 		? path.replace('\\', '/')
 		 : path.replace('/', '\\');
 }
+@SuppressWarnings("resource") // don't close classpathEntry.zipFile, which we don't own
 private NameEnvironmentAnswer findClass(String qualifiedTypeName, char[] typeName, boolean asBinaryOnly, /*NonNull*/char[] moduleName) {
 	NameEnvironmentAnswer answer = internalFindClass(qualifiedTypeName, typeName, asBinaryOnly, moduleName);
 	if (this.annotationsFromClasspath && answer != null && answer.getBinaryType() instanceof ClassFileReader) {
@@ -418,7 +442,7 @@ private NameEnvironmentAnswer findClass(String qualifiedTypeName, char[] typeNam
 			if (classpathEntry.hasAnnotationFileFor(qualifiedTypeName)) {
 				// in case of 'this.annotationsFromClasspath' we indeed search for .eea entries inside the main zipFile of the entry:
 				ZipFile zip = classpathEntry instanceof ClasspathJar ? ((ClasspathJar) classpathEntry).zipFile : null;
-				boolean shouldClose = false; // don't close classpathEntry.zipFile, which we don't own
+				boolean shouldClose = false;
 				try {
 					if (zip == null) {
 						zip = ExternalAnnotationDecorator.getAnnotationZipFile(classpathEntry.getPath(), null);
@@ -621,7 +645,7 @@ private char[][] filterModules(char[][] declaringModules) {
 	return filtered;
 }
 private Parser getParser() {
-	Map<String,String> opts = new HashMap<String, String>();
+	Map<String,String> opts = new HashMap<>();
 	opts.put(CompilerOptions.OPTION_Source, CompilerOptions.VERSION_9);
 	return new Parser(
 			new ProblemReporter(DefaultErrorHandlingPolicies.exitOnFirstError(), new CompilerOptions(opts), new DefaultProblemFactory(Locale.getDefault())),
@@ -633,7 +657,7 @@ public boolean hasCompilationUnit(char[][] qualifiedPackageName, char[] moduleNa
 	String moduleNameString = String.valueOf(moduleName);
 	LookupStrategy strategy = LookupStrategy.get(moduleName);
 	Parser parser = checkCUs ? getParser() : null;
-	Function<CompilationUnit, String> pkgNameExtractor = (sourceUnit) -> {
+	Function<CompilationUnit, String> pkgNameExtractor = sourceUnit -> {
 		String pkgName = null;
 		CompilationResult compilationResult = new CompilationResult(sourceUnit, 0, 0, 1);
 		char[][] name = parser.parsePackageDeclaration(sourceUnit.getContents(), compilationResult);

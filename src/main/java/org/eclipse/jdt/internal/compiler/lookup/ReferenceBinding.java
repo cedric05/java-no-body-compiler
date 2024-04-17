@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2021 IBM Corporation and others.
+ * Copyright (c) 2000, 2023 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -56,12 +56,12 @@ import java.util.Arrays;
 import java.util.Comparator;
 
 import org.eclipse.jdt.core.compiler.CharOperation;
-import org.eclipse.jdt.core.compiler.InvalidInputException;
 import org.eclipse.jdt.internal.compiler.ast.LambdaExpression;
 import org.eclipse.jdt.internal.compiler.ast.MethodDeclaration;
 import org.eclipse.jdt.internal.compiler.ast.NullAnnotationMatching;
 import org.eclipse.jdt.internal.compiler.classfmt.ClassFileConstants;
 import org.eclipse.jdt.internal.compiler.impl.CompilerOptions;
+import org.eclipse.jdt.internal.compiler.impl.JavaFeature;
 import org.eclipse.jdt.internal.compiler.impl.ReferenceContext;
 import org.eclipse.jdt.internal.compiler.util.SimpleLookupTable;
 
@@ -97,7 +97,7 @@ abstract public class ReferenceBinding extends TypeBinding {
 		public boolean hasTypeBit(int bit) { return false; }
 	};
 
-	private static final Comparator<FieldBinding> FIELD_COMPARATOR = new Comparator<FieldBinding>() {
+	private static final Comparator<FieldBinding> FIELD_COMPARATOR = new Comparator<>() {
 		@Override
 		public int compare(FieldBinding o1, FieldBinding o2) {
 			char[] n1 = o1.name;
@@ -105,7 +105,7 @@ abstract public class ReferenceBinding extends TypeBinding {
 			return ReferenceBinding.compare(n1, n2, n1.length, n2.length);
 		}
 	};
-	private static final Comparator<MethodBinding> METHOD_COMPARATOR = new Comparator<MethodBinding>() {
+	private static final Comparator<MethodBinding> METHOD_COMPARATOR = new Comparator<>() {
 		@Override
 		public int compare(MethodBinding m1, MethodBinding m2) {
 			char[] s1 = m1.selector;
@@ -136,6 +136,15 @@ public ReferenceBinding() {
 	super();
 }
 
+/**
+ * Get the accessor method given the record component name
+ * @param name name of the record component
+ * @return the method binding of the accessor if found, else null
+ */
+public MethodBinding getRecordComponentAccessor(char[] name) {
+	return null;
+}
+
 public static FieldBinding binarySearch(char[] name, FieldBinding[] sortedFields) {
 	if (sortedFields == null)
 		return null;
@@ -160,13 +169,11 @@ public static FieldBinding binarySearch(char[] name, FieldBinding[] sortedFields
 }
 
 /**
- * Returns a combined range value representing: (start + (end<<32)), where start is the index of the first matching method
+ * Returns a combined range value representing: {@code (start + (end<<32))}, where start is the index of the first matching method
  * (remember methods are sorted alphabetically on selectors), and end is the index of last contiguous methods with same
  * selector.
  * -1 means no method got found
- * @param selector
- * @param sortedMethods
- * @return (start + (end<<32)) or -1 if no method found
+ * @return {@code (start + (end<<32))} or -1 if no method found
  */
 public static long binarySearch(char[] selector, MethodBinding[] sortedMethods) {
 	if (sortedMethods == null)
@@ -283,6 +290,12 @@ public void setHierarchyCheckDone() {
 	return;
 }
 
+/**
+ * @return true, if the fields of the binding are fully initialized.
+ */
+protected boolean isFieldInitializationFinished() {
+	return true;
+}
 
 /**
  * Answer true if the receiver can be instantiated
@@ -451,7 +464,7 @@ public char[] computeGenericTypeSignature(TypeVariableBinding[] typeVariables) {
 	if (typeVariables == Binding.NO_TYPE_VARIABLES && !isMemberOfGeneric) {
 		return signature();
 	}
-	StringBuffer sig = new StringBuffer(10);
+	StringBuilder sig = new StringBuilder(10);
 	if (isMemberOfGeneric) {
 	    char[] typeSig = enclosingType().genericTypeSignature();
 	    sig.append(typeSig, 0, typeSig.length-1); // copy all but trailing semicolon
@@ -484,19 +497,20 @@ public void computeId() {
 
 		case 3 :
 			char[] packageName = this.compoundName[0];
-			// expect only java.*.* and javax.*.* and junit.*.* and org.junit.*
+			// expect only java.*.* and javax.*.* and jakarta.*.* and junit.*.* and org.junit.*
 			switch (packageName.length) {
 				case 3: // only one type in this group, yet:
 					if (CharOperation.equals(TypeConstants.ORG_JUNIT_ASSERT, this.compoundName))
 						this.id = TypeIds.T_OrgJunitAssert;
-					else if (CharOperation.equals(TypeConstants.JDK_INTERNAL_PREVIEW_FEATURE, this.compoundName))
+					else if (CharOperation.equals(TypeConstants.JDK_INTERNAL_PREVIEW_FEATURE, this.compoundName)
+							|| CharOperation.equals(TypeConstants.JDK_INTERNAL_JAVAC_PREVIEW_FEATURE, this.compoundName))
 						this.id = TypeIds.T_JdkInternalPreviewFeature;
 					return;
 				case 4:
 					if (!CharOperation.equals(TypeConstants.JAVA, packageName))
 						return;
 					break; // continue below ...
-				case 5:
+				case 5: // javax
 					switch (packageName[1]) {
 						case 'a':
 							if (CharOperation.equals(TypeConstants.JAVAX_ANNOTATION_INJECT_INJECT, this.compoundName))
@@ -505,6 +519,14 @@ public void computeId() {
 						case 'u':
 							if (CharOperation.equals(TypeConstants.JUNIT_FRAMEWORK_ASSERT, this.compoundName))
 								this.id = TypeIds.T_JunitFrameworkAssert;
+							return;
+					}
+					return;
+				case 7: // jakarta
+					switch (packageName[1]) {
+						case 'a':
+							if (CharOperation.equals(TypeConstants.JAKARTA_ANNOTATION_INJECT_INJECT, this.compoundName))
+								this.id = TypeIds.T_JavaxInjectInject;
 							return;
 					}
 					return;
@@ -962,8 +984,9 @@ public void computeId(LookupEnvironment environment) {
 	environment.getUnannotatedType(this);
 }
 
-/**
- * p.X<T extends Y & I, U extends Y> {} -> Lp/X<TT;TU;>;
+/**{@code 
+ * p.X<T extends Y & I, U extends Y> -> Lp/X<TT;TU;>; 
+ * }
  */
 @Override
 public char[] computeUniqueKey(boolean isLeaf) {
@@ -1049,10 +1072,6 @@ public FieldBinding[] fields() {
 	return Binding.NO_FIELDS;
 }
 
-public RecordComponentBinding[] components() {
-	return Binding.NO_COMPONENTS;
-}
-
 public final int getAccessFlags() {
 	return this.modifiers & ExtraCompilerModifiers.AccJustFlag;
 }
@@ -1062,7 +1081,7 @@ public final int getAccessFlags() {
  */
 @Override
 public AnnotationBinding[] getAnnotations() {
-	return retrieveAnnotations(this);
+	return retrieveAnnotations(prototype());
 }
 
 /**
@@ -1089,6 +1108,13 @@ public MethodBinding getExactMethod(char[] selector, TypeBinding[] argumentTypes
 	return null;
 }
 public FieldBinding getField(char[] fieldName, boolean needResolve) {
+	return null;
+}
+public RecordComponentBinding getComponent(char[] componentName, boolean needResolve) {
+	return null;
+}
+// adding this since we don't use sorting for components
+public RecordComponentBinding getRecordComponent(char[] name) {
 	return null;
 }
 /**
@@ -1186,7 +1212,7 @@ final int identityHashCode() {
 
 /**
  * Returns true if the two types have an incompatible common supertype,
- * e.g. List<String> and List<Integer>
+ * e.g. {@code List<String>} and {@code List<Integer>}
  */
 public boolean hasIncompatibleSuperType(ReferenceBinding otherType) {
 
@@ -1252,8 +1278,10 @@ public boolean hasMemberTypes() {
  * for 1.8 check if the default is applicable to the given kind of location.
  */
 // pre: null annotation analysis is enabled
-boolean hasNonNullDefaultFor(int location, int sourceStart) {
+boolean hasNonNullDefaultForType(TypeBinding type, int location, int sourceStart) {
 	// Note, STB overrides for correctly handling local types
+	if (type != null && !type.acceptsNonNullDefault())
+		return false;
 	ReferenceBinding currentType = this;
 	while (currentType != null) {
 		int nullDefault = ((ReferenceBinding)currentType.original()).getNullDefault();
@@ -1723,7 +1751,7 @@ public boolean isThrowable() {
 
 /**
  * JLS 11.5 ensures that Throwable, Exception, RuntimeException and Error are directly connected.
- * (Throwable<- Exception <- RumtimeException, Throwable <- Error). Thus no need to check #isCompatibleWith
+ * {@code (Throwable<- Exception <- RumtimeException, Throwable <- Error)}. Thus no need to check #isCompatibleWith
  * but rather check in type IDs so as to avoid some eager class loading for JCL writers.
  * When 'includeSupertype' is true, answers true if the given type can be a supertype of some unchecked exception
  * type (i.e. Throwable or Exception).
@@ -1796,7 +1824,7 @@ public final ReferenceBinding outermostEnclosingType() {
 /**
  * Answer the source name for the type.
  * In the case of member types, as the qualified name from its top level type.
- * For example, for a member type N defined inside M & A: "A.M.N".
+ * For example, for a member type N defined inside {@code M & A: "A.M.N"}.
  */
 @Override
 public char[] qualifiedSourceName() {
@@ -1824,7 +1852,7 @@ public char[] readableName(boolean showGenerics) /*java.lang.Object,  p.X<T> */ 
 	if (showGenerics) {
 		TypeVariableBinding[] typeVars;
 		if ((typeVars = typeVariables()) != Binding.NO_TYPE_VARIABLES) {
-		    StringBuffer nameBuffer = new StringBuffer(10);
+		    StringBuilder nameBuffer = new StringBuilder(10);
 		    nameBuffer.append(readableName).append('<');
 		    for (int i = 0, length = typeVars.length; i < length; i++) {
 		        if (i > 0) nameBuffer.append(',');
@@ -1839,7 +1867,7 @@ public char[] readableName(boolean showGenerics) /*java.lang.Object,  p.X<T> */ 
 	return readableName;
 }
 
-protected void appendNullAnnotation(StringBuffer nameBuffer, CompilerOptions options) {
+protected void appendNullAnnotation(StringBuilder nameBuffer, CompilerOptions options) {
 	if (options.isAnnotationBasedNullAnalysisEnabled) {
 		if (options.usesNullTypeAnnotations()) {
 			for (AnnotationBinding annotation : this.typeAnnotations) {
@@ -1894,7 +1922,7 @@ public char[] nullAnnotatedReadableName(CompilerOptions options, boolean shortNa
 }
 
 char[] nullAnnotatedReadableName(CompilerOptions options) {
-    StringBuffer nameBuffer = new StringBuffer(10);
+    StringBuilder nameBuffer = new StringBuilder(10);
 	if (isMemberType()) {
 		nameBuffer.append(enclosingType().nullAnnotatedReadableName(options, false));
 		nameBuffer.append('.');
@@ -1933,7 +1961,7 @@ char[] nullAnnotatedReadableName(CompilerOptions options) {
 }
 
 char[] nullAnnotatedShortReadableName(CompilerOptions options) {
-    StringBuffer nameBuffer = new StringBuffer(10);
+    StringBuilder nameBuffer = new StringBuilder(10);
 	if (isMemberType()) {
 		nameBuffer.append(enclosingType().nullAnnotatedReadableName(options, true));
 		nameBuffer.append('.');
@@ -1975,7 +2003,7 @@ public char[] shortReadableName(boolean showGenerics) /*Object*/ {
 	if (showGenerics) {
 		TypeVariableBinding[] typeVars;
 		if ((typeVars = typeVariables()) != Binding.NO_TYPE_VARIABLES) {
-		    StringBuffer nameBuffer = new StringBuffer(10);
+		    StringBuilder nameBuffer = new StringBuilder(10);
 		    nameBuffer.append(shortReadableName).append('<');
 		    for (int i = 0, length = typeVars.length; i < length; i++) {
 		        if (i > 0) nameBuffer.append(',');
@@ -2007,7 +2035,7 @@ public char[] sourceName() {
  * Perform an upwards type projection as per JLS 4.10.5
  * @param scope Relevant scope for evaluating type projection
  * @param mentionedTypeVariables Filter for mentioned type variabled
- * @returns Upwards type projection of 'this', or null if downwards projection is undefined
+ * @return Upwards type projection of 'this', or null if downwards projection is undefined
 */
 @Override
 public ReferenceBinding upwardsProjection(Scope scope, TypeBinding[] mentionedTypeVariables) {
@@ -2018,7 +2046,7 @@ public ReferenceBinding upwardsProjection(Scope scope, TypeBinding[] mentionedTy
  * Perform a downwards type projection as per JLS 4.10.5
  * @param scope Relevant scope for evaluating type projection
  * @param mentionedTypeVariables Filter for mentioned type variabled
- * @returns Downwards type projection of 'this', or null if downwards projection is undefined
+ * @return Downwards type projection of 'this', or null if downwards projection is undefined
 */
 @Override
 public ReferenceBinding downwardsProjection(Scope scope, TypeBinding[] mentionedTypeVariables) {
@@ -2089,6 +2117,9 @@ public FieldBinding[] unResolvedFields() {
 	return Binding.NO_FIELDS;
 }
 
+public RecordComponentBinding[] unResolvedComponents() {
+	return Binding.NO_COMPONENTS;
+}
 /*
  * If a type - known to be a Closeable - is mentioned in one of our white lists
  * answer the typeBit for the white list (BitWrapperCloseable or BitResourceFreeCloseable).
@@ -2133,6 +2164,11 @@ protected int applyCloseableClassWhitelists(CompilerOptions options) {
 			return TypeIds.BitWrapperCloseable;
 	}
 	if (options.analyseResourceLeaks) {
+		if (options.isAnnotationBasedResourceAnalysisEnabled) {
+			if ((this.getAnnotationTagBits() & TagBits.AnnotationNotOwning) != 0) {
+				return TypeIds.BitResourceFreeCloseable;
+			}
+		}
 		ReferenceBinding mySuper = this.superclass();
 		if (mySuper != null && mySuper.id != TypeIds.T_JavaLangObject) {
 			if (hasMethodWithNumArgs(TypeConstants.CLOSE, 0))
@@ -2157,7 +2193,7 @@ protected boolean hasMethodWithNumArgs(char[] selector, int numArgs) {
  * If a type - known to be a Closeable - is mentioned in one of our white lists
  * answer the typeBit for the white list (BitWrapperCloseable or BitResourceFreeCloseable).
  */
-protected int applyCloseableInterfaceWhitelists() {
+protected int applyCloseableInterfaceWhitelists(CompilerOptions options) {
 	switch (this.compoundName.length) {
 		case 4:
 			if (CharOperation.equals(this.compoundName[0], TypeConstants.JAVA_UTIL_STREAM[0])) {
@@ -2185,13 +2221,49 @@ protected int applyCloseableInterfaceWhitelists() {
 			}
 			break;
 	}
+	if (options.isAnnotationBasedResourceAnalysisEnabled) {
+		if ((this.getAnnotationTagBits() & TagBits.AnnotationNotOwning) != 0) {
+			return TypeIds.BitResourceFreeCloseable;
+		}
+	}
 	return 0;
 }
 
-protected MethodBinding [] getInterfaceAbstractContracts(Scope scope, boolean replaceWildcards, boolean filterDefaultMethods) throws InvalidInputException {
+public void detectWrapperResource() {
+	if (hasTypeBit(TypeIds.BitAutoCloseable|TypeIds.BitCloseable)
+			&& !hasTypeBit(TypeIds.BitResourceFreeCloseable|TypeIds.BitWrapperCloseable)) {
+		int numResourceFields = 0;
+		for (FieldBinding field : fields()) {
+			if (field.type != null
+					&& field.type.hasTypeBit(TypeIds.BitAutoCloseable|TypeIds.BitCloseable)
+					&& (field.tagBits & TagBits.AnnotationOwning) != 0) {
+				numResourceFields++;
+			}
+		}
+		if (numResourceFields == 1) {
+			boolean nonPrivateCtorsReceiveResource = false;
+			for (MethodBinding method : methods()) {
+				if (method.isConstructor() && !method.isPrivate() && method.parameters.length > 0) {
+					TypeBinding param = method.parameters[0];
+					if (param.hasTypeBit(TypeIds.BitAutoCloseable|TypeIds.BitCloseable) && method.ownsParameter(0)) {
+						nonPrivateCtorsReceiveResource = true;
+					} else {
+						nonPrivateCtorsReceiveResource = false;
+						break;
+					}
+				}
+			}
+			if (nonPrivateCtorsReceiveResource) {
+				this.typeBits |= TypeIds.BitWrapperCloseable;
+			}
+		}
+	}
+}
+
+protected MethodBinding [] getInterfaceAbstractContracts(Scope scope, boolean replaceWildcards, boolean filterDefaultMethods) throws InvalidBindingException {
 
 	if (!isInterface() || !isValidBinding()) {
-		throw new InvalidInputException("Not a functional interface"); //$NON-NLS-1$
+		throw new InvalidBindingException("Not a functional interface"); //$NON-NLS-1$
 	}
 
 	MethodBinding [] methods = methods();
@@ -2218,7 +2290,7 @@ protected MethodBinding [] getInterfaceAbstractContracts(Scope scope, boolean re
 		if (method == null || method.isStatic() || method.redeclaresPublicObjectMethod(scope) || method.isPrivate())
 			continue;
 		if (!method.isValidBinding())
-			throw new InvalidInputException("Not a functional interface"); //$NON-NLS-1$
+			throw new InvalidBindingException("Not a functional interface"); //$NON-NLS-1$
 		for (int j = 0; j < contractsCount;) {
 			if ( contracts[j] != null && MethodVerifier.doesMethodOverride(method, contracts[j], environment)) {
 				contractsCount--;
@@ -2285,9 +2357,7 @@ public MethodBinding getSingleAbstractMethod(Scope scope, boolean replaceWildcar
 	} else {
 		this.singleAbstractMethod = new MethodBinding[2];
 		// Sec 9.8 of sealed preview - A functional interface is an interface that is not declared sealed...
-		CompilerOptions options = scope.compilerOptions();
-		if (options.complianceLevel == ClassFileConstants.JDK16
-				&& options.enablePreviewFeatures
+		if (JavaFeature.SEALED_CLASSES.isSupported(scope.compilerOptions())
 				&& this.isSealed())
 			return this.singleAbstractMethod[index] = samProblemBinding;
 	}
@@ -2313,7 +2383,7 @@ public MethodBinding getSingleAbstractMethod(Scope scope, boolean replaceWildcar
 					return this.singleAbstractMethod[index] = samProblemBinding;
 			}
 		}
-	} catch (InvalidInputException e) {
+	} catch (InvalidBindingException e) {
 		return this.singleAbstractMethod[index] = samProblemBinding;
 	}
 	if (methods.length == 1)
@@ -2460,5 +2530,12 @@ public boolean hasEnclosingInstanceContext() {
 	if (enclosingMethod != null)
 		return !enclosingMethod.isStatic();
 	return false;
+}
+static class InvalidBindingException extends Exception {
+	private static final long serialVersionUID = 1L;
+
+	InvalidBindingException(String message) {
+		super(message);
+	}
 }
 }

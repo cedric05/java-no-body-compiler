@@ -146,8 +146,12 @@ public FlowInfo analyseAssignment(BlockScope currentScope, FlowContext flowConte
 			}
 			if (flowInfo.isPotentiallyAssigned(localBinding) || (this.bits & ASTNode.IsCapturedOuterLocal) != 0) {
 				localBinding.tagBits &= ~TagBits.IsEffectivelyFinal;
-				if (!isFinal && (this.bits & ASTNode.IsCapturedOuterLocal) != 0) {
-					currentScope.problemReporter().cannotReferToNonEffectivelyFinalOuterLocal(localBinding, this);
+				if (!isFinal) {
+					if ((this.bits & ASTNode.IsCapturedOuterLocal) != 0) {
+						currentScope.problemReporter().cannotReferToNonEffectivelyFinalOuterLocal(localBinding, this);
+					} else if ((this.bits & ASTNode.IsUsedInPatternGuard) != 0) {
+						currentScope.problemReporter().cannotReferToNonFinalLocalInGuard(localBinding, this);
+					}
 				}
 			}
 			if (! isFinal && (localBinding.tagBits & TagBits.IsEffectivelyFinal) != 0 && (localBinding.tagBits & TagBits.IsArgument) == 0) {
@@ -169,7 +173,9 @@ public FlowInfo analyseAssignment(BlockScope currentScope, FlowContext flowConte
 				}
 			}
 			else /* avoid double diagnostic */ if ((localBinding.tagBits & TagBits.IsArgument) != 0) {
-				currentScope.problemReporter().parameterAssignment(localBinding, this);
+				MethodBinding owner = localBinding.getEnclosingMethod();
+				if (owner == null /*lambda */ || !owner.isCompactConstructor())
+					currentScope.problemReporter().parameterAssignment(localBinding, this);
 			}
 			flowInfo.markAsDefinitelyAssigned(localBinding);
 	}
@@ -496,9 +502,8 @@ public void generateCode(BlockScope currentScope, CodeStream codeStream, boolean
 					codeStream.recordPositionsFrom(pc, this.sourceStart);
 					return;
 				}
-				// outer local?
-				if ((this.bits & ASTNode.IsCapturedOuterLocal) != 0) {
-					checkEffectiveFinality(localBinding, currentScope);
+				// checkEffectiveFinality() returns if it's outer local
+				if (checkEffectiveFinality(localBinding, currentScope)) {
 					// outer local can be reached either through a synthetic arg or a synthetic field
 					VariableBinding[] path = currentScope.getEmulationPath(localBinding);
 					codeStream.generateOuterAccess(path, this, localBinding, currentScope);
@@ -990,7 +995,7 @@ public TypeBinding postConversionType(Scope scope) {
 }
 
 @Override
-public StringBuffer printExpression(int indent, StringBuffer output){
+public StringBuilder printExpression(int indent, StringBuilder output){
 	return output.append(this.token);
 }
 public TypeBinding reportError(BlockScope scope) {

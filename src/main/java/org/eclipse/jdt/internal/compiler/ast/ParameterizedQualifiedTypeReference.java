@@ -40,11 +40,6 @@ public class ParameterizedQualifiedTypeReference extends ArrayQualifiedTypeRefer
 	public TypeReference[][] typeArguments;
 	ReferenceBinding[] typesPerToken;
 
-	/**
-	 * @param tokens
-	 * @param dim
-	 * @param positions
-	 */
 	public ParameterizedQualifiedTypeReference(char[][] tokens, TypeReference[][] typeArguments, int dim, long[] positions) {
 
 		super(tokens, dim, positions);
@@ -143,7 +138,7 @@ public class ParameterizedQualifiedTypeReference extends ArrayQualifiedTypeRefer
 			if (arguments == null) {
 				qParamName[i] = this.tokens[i];
 			} else {
-				StringBuffer buffer = new StringBuffer(5);
+				StringBuilder buffer = new StringBuilder(5);
 				buffer.append(this.tokens[i]);
 				buffer.append('<');
 				for (int j = 0, argLength =arguments.length; j < argLength; j++) {
@@ -394,7 +389,7 @@ public class ParameterizedQualifiedTypeReference extends ArrayQualifiedTypeRefer
 	}
 
 	@Override
-	public StringBuffer printExpression(int indent, StringBuffer output) {
+	public StringBuilder printExpression(int indent, StringBuilder output) {
 		int length = this.tokens.length;
 		for (int i = 0; i < length - 1; i++) {
 			if (this.annotations != null && this.annotations[i] != null) {
@@ -539,4 +534,25 @@ public class ParameterizedQualifiedTypeReference extends ArrayQualifiedTypeRefer
 		visitor.endVisit(this, scope);
 	}
 
+	@Override
+	public void updateWithAnnotations(Scope scope, int location) {
+		int lastToken = this.tokens.length - 1;
+		TypeBinding updatedLeaf;
+		if (this.typesPerToken != null && this.typesPerToken[lastToken] != null) {
+			for (int i = 0; i <= lastToken; i++) {
+				this.typesPerToken[i] = (ReferenceBinding) updateParameterizedTypeWithAnnotations(scope, this.typesPerToken[i], this.typeArguments[i]);
+			}
+			updatedLeaf = this.typesPerToken[lastToken];
+		} else {
+			updatedLeaf = updateParameterizedTypeWithAnnotations(scope, this.resolvedType, this.typeArguments[lastToken]);
+		}
+		if (updatedLeaf != this.resolvedType.leafComponentType()) { //$IDENTITY-COMPARISON$
+			if (this.dimensions > 0 && this.dimensions <= 255) {
+				this.resolvedType = scope.createArrayType(updatedLeaf, this.dimensions);
+			} else {
+				this.resolvedType = updatedLeaf;
+			}
+		}
+		resolveAnnotations(scope, location); // see comment in super TypeReference.updateWithAnnotations()
+	}
 }

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2020 IBM Corporation and others.
+ * Copyright (c) 2000, 2024 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -25,14 +25,18 @@
  *								Bug 466713 - Null Annotations: NullPointerException using <int @Nullable []> as Type Param
  *     Jesper S Moller <jesper@selskabet.org> - Contributions for
  *								bug 378674 - "The method can be declared as static" is wrong
+ *                              bug 413873 - Warning "Method can be static" on method referencing a non-static inner class
  *******************************************************************************/
 package org.eclipse.jdt.internal.compiler.ast;
 
 import java.util.List;
+import java.util.function.BiPredicate;
 
 import org.eclipse.jdt.core.compiler.CharOperation;
 import org.eclipse.jdt.internal.compiler.ASTVisitor;
 import org.eclipse.jdt.internal.compiler.CompilationResult;
+import org.eclipse.jdt.internal.compiler.ast.TypeReference.AnnotationCollector;
+import org.eclipse.jdt.internal.compiler.ast.TypeReference.AnnotationPosition;
 import org.eclipse.jdt.internal.compiler.classfmt.ClassFileConstants;
 import org.eclipse.jdt.internal.compiler.flow.ExceptionHandlingFlowContext;
 import org.eclipse.jdt.internal.compiler.flow.FlowContext;
@@ -41,17 +45,18 @@ import org.eclipse.jdt.internal.compiler.impl.CompilerOptions;
 import org.eclipse.jdt.internal.compiler.lookup.BlockScope;
 import org.eclipse.jdt.internal.compiler.lookup.ClassScope;
 import org.eclipse.jdt.internal.compiler.lookup.ExtraCompilerModifiers;
+import org.eclipse.jdt.internal.compiler.lookup.FieldBinding;
 import org.eclipse.jdt.internal.compiler.lookup.LocalTypeBinding;
 import org.eclipse.jdt.internal.compiler.lookup.MemberTypeBinding;
+import org.eclipse.jdt.internal.compiler.lookup.ReferenceBinding;
 import org.eclipse.jdt.internal.compiler.lookup.TagBits;
 import org.eclipse.jdt.internal.compiler.lookup.TypeBinding;
 import org.eclipse.jdt.internal.compiler.lookup.TypeConstants;
+import org.eclipse.jdt.internal.compiler.lookup.TypeIds;
 import org.eclipse.jdt.internal.compiler.lookup.TypeVariableBinding;
 import org.eclipse.jdt.internal.compiler.parser.Parser;
 import org.eclipse.jdt.internal.compiler.problem.AbortMethod;
 import org.eclipse.jdt.internal.compiler.problem.ProblemSeverities;
-import org.eclipse.jdt.internal.compiler.ast.TypeReference.AnnotationCollector;
-import org.eclipse.jdt.internal.compiler.ast.TypeReference.AnnotationPosition;
 
 public class MethodDeclaration extends AbstractMethodDeclaration {
 
@@ -111,16 +116,56 @@ public class MethodDeclaration extends AbstractMethodDeclaration {
 					this.scope,
 					FlowInfo.DEAD_END);
 
-			// nullity and mark as assigned
-			analyseArguments(classScope.environment(), flowInfo, this.arguments, this.binding);
+			// nullity, owning and mark as assigned
+			analyseArguments(classScope.environment(), flowInfo, flowContext, this.arguments, this.binding);
 
-			if (this.binding.declaringClass instanceof MemberTypeBinding && !this.binding.declaringClass.isStatic()) {
+			BiPredicate<TypeBinding, ReferenceBinding> condition = (argType, declClass) -> {
+				ReferenceBinding enclosingType = argType.enclosingType();
+				if (enclosingType != null && TypeBinding.equalsEquals(declClass, enclosingType.actualType())) {
+					return true;
+				}
+				return false;
+			};
+			boolean referencesGenericType = false;
+			ReferenceBinding declaringClass = this.binding.declaringClass;
+			if (declaringClass.isGenericType()) {
+				if (condition.test(this.binding.returnType, declaringClass)) {
+					referencesGenericType = true;
+				}
+				if (!referencesGenericType && this.binding.parameters != null && this.arguments != null) {
+					int length = Math.min(this.binding.parameters.length, this.arguments.length);
+					for (int i = 0; i < length; i++) {
+						if (condition.test(this.binding.parameters[i], this.binding.declaringClass)) {
+							referencesGenericType = true;
+							break;
+						}
+					}
+				}
+			}
+			if (this.binding.declaringClass instanceof MemberTypeBinding && !this.binding.declaringClass.isStatic() || referencesGenericType) {
 				// method of a non-static member type can't be static.
 				this.bits &= ~ASTNode.CanBeStatic;
 			}
+			CompilerOptions compilerOptions = this.scope.compilerOptions();
+			if (compilerOptions.isAnnotationBasedResourceAnalysisEnabled
+					&& this.binding.isClosingMethod())
+			{
+				// implementation of AutoCloseable.close() should close all @Owning fields, create the obligation now:
+				ReferenceBinding currentClass = this.binding.declaringClass;
+				while (currentClass != null) {
+					for (FieldBinding fieldBinding : currentClass.fields()) {
+						if (!fieldBinding.isStatic()
+								&& fieldBinding.type.hasTypeBit(TypeIds.BitAutoCloseable|TypeIds.BitCloseable)
+								&& (fieldBinding.tagBits & TagBits.AnnotationOwning) != 0) {
+							fieldBinding.closeTracker = new FakedTrackingVariable(fieldBinding, this.scope, this,
+									flowInfo, flowContext, FlowInfo.NULL, true);
+						}
+					}
+					currentClass = currentClass.superclass();
+				}
+			}
 			// propagate to statements
 			if (this.statements != null) {
-				CompilerOptions compilerOptions = this.scope.compilerOptions();
 				boolean enableSyntacticNullAnalysisForFields = compilerOptions.enableSyntacticNullAnalysisForFields;
 				int complaintLevel = (flowInfo.reachMode() & FlowInfo.UNREACHABLE) == 0 ? Statement.NOT_COMPLAINED : Statement.COMPLAINED_FAKE_REACHABLE;
 				for (int i = 0, count = this.statements.length; i < count; i++) {
@@ -132,7 +177,7 @@ public class MethodDeclaration extends AbstractMethodDeclaration {
 						methodContext.expireNullCheckedFieldInfo();
 					}
 					if (compilerOptions.analyseResourceLeaks) {
-						FakedTrackingVariable.cleanUpUnassigned(this.scope, stat, flowInfo);
+						FakedTrackingVariable.cleanUpUnassigned(this.scope, stat, flowInfo, false);
 					}
 				}
 			} else {
@@ -227,7 +272,7 @@ public class MethodDeclaration extends AbstractMethodDeclaration {
 	}
 
 	@Override
-	public StringBuffer printReturnType(int indent, StringBuffer output) {
+	public StringBuilder printReturnType(int indent, StringBuilder output) {
 		if (this.returnType == null) return output;
 		return this.returnType.printExpression(0, output).append(' ');
 	}

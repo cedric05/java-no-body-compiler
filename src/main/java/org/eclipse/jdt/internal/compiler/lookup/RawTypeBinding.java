@@ -27,8 +27,8 @@ import org.eclipse.jdt.core.compiler.CharOperation;
 
 /**
  * Denote a raw type, i.e. a generic type referenced without any type arguments.
- * e.g. X<T extends Exception> can be used a raw type 'X', in which case it
- * 	will behave as X<Exception>
+ * e.g. {@code X<T extends Exception>} can be used a raw type 'X', in which case it
+ * 	will behave as {@code X<Exception>}
  */
 public class RawTypeBinding extends ParameterizedTypeBinding {
 
@@ -67,7 +67,7 @@ public class RawTypeBinding extends ParameterizedTypeBinding {
 
 	@Override
 	public char[] computeUniqueKey(boolean isLeaf) {
-	    StringBuffer sig = new StringBuffer(10);
+	    StringBuilder sig = new StringBuilder(10);
 		if (isMemberType() && (enclosingType().isParameterizedType() || enclosingType().isRawType())) {
 			if (!hasEnclosingInstanceContext()) {
 			    char[] typeSig = enclosingType().signature(); // don't consider generics from enclosing of static member
@@ -135,19 +135,20 @@ public class RawTypeBinding extends ParameterizedTypeBinding {
 	public String debugName() {
 		if (this.hasTypeAnnotations())
 			return annotatedDebugName();
-		StringBuffer nameBuffer = new StringBuffer(10);
+		StringBuilder nameBuffer = new StringBuilder(10);
 		nameBuffer.append(actualType().sourceName()).append("#RAW"); //$NON-NLS-1$
 	    return nameBuffer.toString();
 	}
 	@Override
 	public String annotatedDebugName() {
-		StringBuffer buffer = new StringBuffer(super.annotatedDebugName());
+		StringBuilder buffer = new StringBuilder(super.annotatedDebugName());
 		buffer.append("#RAW"); //$NON-NLS-1$
 		return buffer.toString();
 	}
-	/**
+	/**<pre>{@code
 	 * Ltype<param1 ... paramN>;
 	 * LY<TT;>;
+	 * }</pre>
 	 */
 	@Override
 	public char[] genericTypeSignature() {
@@ -155,7 +156,7 @@ public class RawTypeBinding extends ParameterizedTypeBinding {
 			if ((this.modifiers & ExtraCompilerModifiers.AccGenericSignature) == 0) {
 		    	this.genericTypeSignature = genericType().signature();
 			} else {
-			    StringBuffer sig = new StringBuffer(10);
+			    StringBuilder sig = new StringBuilder(10);
 			    if (isMemberType() && hasEnclosingInstanceContext()) {
 			    	ReferenceBinding enclosing = enclosingType();
 					char[] typeSig = enclosing.genericTypeSignature();

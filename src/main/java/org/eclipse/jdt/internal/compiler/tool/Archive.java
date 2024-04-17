@@ -13,6 +13,7 @@
  *******************************************************************************/
 package org.eclipse.jdt.internal.compiler.tool;
 
+import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.Charset;
@@ -26,10 +27,12 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipException;
 import java.util.zip.ZipFile;
 
+import org.eclipse.jdt.internal.compiler.util.JRTUtil;
+
 /**
  * Used as a zip file cache.
  */
-public class Archive {
+public class Archive implements Closeable {
 
 	public static final Archive UNKNOWN_ARCHIVE = new Archive();
 
@@ -107,6 +110,13 @@ public class Archive {
 			try {
 				this.zipFile = new ZipFile(this.file);
 			} catch(IOException e) {
+				String error = "Failed to read types from archive " + this.file; //$NON-NLS-1$
+				if (JRTUtil.PROPAGATE_IO_ERRORS) {
+					throw new IllegalStateException(error, e);
+				} else {
+					System.err.println(error);
+					e.printStackTrace();
+				}
 				return Collections.<String[]>emptyList();
 			}
 			this.initialize();
@@ -118,12 +128,13 @@ public class Archive {
 		this.packagesCache = null;
 	}
 
+	@Override
 	public void close() {
+		this.packagesCache = null;
 		try {
 			if (this.zipFile != null) {
 				this.zipFile.close();
 			}
-			this.packagesCache = null;
 		} catch (IOException e) {
 			// ignore
 		}

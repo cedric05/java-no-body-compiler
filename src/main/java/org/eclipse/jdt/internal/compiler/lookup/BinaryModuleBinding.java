@@ -13,7 +13,8 @@
  *******************************************************************************/
 package org.eclipse.jdt.internal.compiler.lookup;
 
-import java.util.HashMap;
+import java.net.URI;
+import java.util.LinkedHashMap;
 import java.util.stream.Stream;
 
 import org.eclipse.jdt.core.compiler.CharOperation;
@@ -85,6 +86,7 @@ public class BinaryModuleBinding extends ModuleBinding {
 	private IPackageExport[] unresolvedOpens;
 	private char[][] unresolvedUses;
 	private IService[] unresolvedProvides;
+	public URI path;
 
 	/**
 	 * Construct a named module from binary, could be an auto module - or from an info from Java Model.
@@ -105,6 +107,7 @@ public class BinaryModuleBinding extends ModuleBinding {
 		super(module.name(), existingEnvironment);
 		existingEnvironment.root.knownModules.put(this.moduleName, this);
 		cachePartsFrom(module);
+		this.path = module.getURI();
 	}
 
 	void cachePartsFrom(IBinaryModule module) {
@@ -157,7 +160,7 @@ public class BinaryModuleBinding extends ModuleBinding {
 				char[] annotationTypeName = annotations[i].getTypeName();
 				if (annotationTypeName[0] != Util.C_RESOLVED)
 					continue;
-				int typeBit = this.environment.getNullAnnotationBit(BinaryTypeBinding.signature2qualifiedTypeName(annotationTypeName));
+				int typeBit = this.environment.getAnalysisAnnotationBit(BinaryTypeBinding.signature2qualifiedTypeName(annotationTypeName));
 				if (typeBit == TypeIds.BitNonNullByDefaultAnnotation) {
 					// using NonNullByDefault we need to inspect the details of the value() attribute:
 					nullness |= BinaryTypeBinding.getNonNullByDefaultValue(annotations[i], this.environment);
@@ -240,7 +243,7 @@ public class BinaryModuleBinding extends ModuleBinding {
 	}
 	private void resolveServices() {
 		this.services = new TypeBinding[this.unresolvedProvides.length];
-		this.implementations = new HashMap<>();
+		this.implementations = new LinkedHashMap<>();
 		for (int i = 0; i < this.unresolvedProvides.length; i++) {
 			this.services[i] = this.environment.getType(CharOperation.splitOn('.', this.unresolvedProvides[i].name()), this);
 			char[][] implNames = this.unresolvedProvides[i].with();

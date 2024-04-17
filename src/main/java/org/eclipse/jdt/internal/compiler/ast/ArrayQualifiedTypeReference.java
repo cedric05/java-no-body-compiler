@@ -69,6 +69,13 @@ public class ArrayQualifiedTypeReference extends QualifiedTypeReference {
 		this.annotationsOnDimensions = annotationsOnDimensions;
 	}
 
+	@Override
+	public Annotation[] getTopAnnotations() {
+		if (this.annotationsOnDimensions != null)
+			return this.annotationsOnDimensions[0];
+		return new Annotation[0];
+	}
+
 	/**
 	 * @return char[][]
 	 */
@@ -121,7 +128,7 @@ public class ArrayQualifiedTypeReference extends QualifiedTypeReference {
 	}
 
 	@Override
-	public StringBuffer printExpression(int indent, StringBuffer output){
+	public StringBuilder printExpression(int indent, StringBuilder output){
 
 		super.printExpression(indent, output);
 		if ((this.bits & IsVarArgs) != 0) {

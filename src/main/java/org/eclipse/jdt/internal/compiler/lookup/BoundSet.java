@@ -23,8 +23,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -74,7 +74,7 @@ class BoundSet {
 		public boolean addBound(TypeBound bound) {
 			boolean result = addBound1(bound);
 			if(result) {
-				Set<InferenceVariable> set = (this.dependencies == null ? new HashSet<>() : this.dependencies);
+				Set<InferenceVariable> set = (this.dependencies == null ? new LinkedHashSet<>() : this.dependencies);
 				bound.right.collectInferenceVariables(set);
 				if (this.dependencies == null && set.size() > 0) {
 					this.dependencies = set;
@@ -85,13 +85,13 @@ class BoundSet {
 		private boolean addBound1(TypeBound bound) {
 			switch (bound.relation) {
 				case ReductionResult.SUPERTYPE:
-					if (this.superBounds == null) this.superBounds = new HashSet<>();
+					if (this.superBounds == null) this.superBounds = new LinkedHashSet<>();
 					return this.superBounds.add(bound);
 				case ReductionResult.SAME:
-					if (this.sameBounds == null) this.sameBounds = new HashSet<>();
+					if (this.sameBounds == null) this.sameBounds = new LinkedHashSet<>();
 					return this.sameBounds.add(bound);
 				case ReductionResult.SUBTYPE:
-					if (this.subBounds == null) this.subBounds = new HashSet<>();
+					if (this.subBounds == null) this.subBounds = new LinkedHashSet<>();
 					return this.subBounds.add(bound);
 				default:
 					throw new IllegalArgumentException("Unexpected bound relation in : " + bound); //$NON-NLS-1$
@@ -193,14 +193,14 @@ class BoundSet {
 		public ThreeSets copy() {
 			ThreeSets copy = new ThreeSets();
 			if (this.superBounds != null)
-				copy.superBounds = new HashSet<>(this.superBounds);
+				copy.superBounds = new LinkedHashSet<>(this.superBounds);
 			if (this.sameBounds != null)
-				copy.sameBounds = new HashSet<>(this.sameBounds);
+				copy.sameBounds = new LinkedHashSet<>(this.sameBounds);
 			if (this.subBounds != null)
-				copy.subBounds = new HashSet<>(this.subBounds);
+				copy.subBounds = new LinkedHashSet<>(this.subBounds);
 			copy.instantiation = this.instantiation;
 			if (this.dependencies != null) {
-				copy.dependencies = new HashSet<>(this.dependencies);
+				copy.dependencies = new LinkedHashSet<>(this.dependencies);
 			}
 			return copy;
 		}
@@ -329,20 +329,20 @@ class BoundSet {
 		}
 	}
 	// main storage of type bounds:
-	HashMap<InferenceVariable, ThreeSets> boundsPerVariable = new HashMap<>();
+	HashMap<InferenceVariable, ThreeSets> boundsPerVariable = new LinkedHashMap<>();
 
 	/**
 	 * 18.1.3 bullet 4: G<α1, ..., αn> = capture(G<A1, ..., An>)
 	 * On both sides we only enter types with nonnull arguments.
 	 */
-	HashMap<ParameterizedTypeBinding,ParameterizedTypeBinding> captures = new HashMap<>();
+	HashMap<ParameterizedTypeBinding,ParameterizedTypeBinding> captures = new LinkedHashMap<>();
 	/** 18.1.3 bullet 5: throws α */
-	Set<InferenceVariable> inThrows = new HashSet<>();
+	Set<InferenceVariable> inThrows = new LinkedHashSet<>();
 
 	private TypeBound[] incorporatedBounds = Binding.NO_TYPE_BOUNDS;
 	private TypeBound[] unincorporatedBounds = new TypeBound[8];
 	private int unincorporatedBoundsCount = 0;
-	private TypeBound[] mostRecentBounds = new TypeBound[4]; // for quick & dirty duplicate elimination
+	private final TypeBound[] mostRecentBounds = new TypeBound[4]; // for quick & dirty duplicate elimination
 
 	public BoundSet() {}
 
@@ -503,28 +503,33 @@ class BoundSet {
 		if (this.unincorporatedBoundsCount == 0 && this.captures.isEmpty())
 			return true;
 
-		do {
-			TypeBound [] freshBounds;
-			System.arraycopy(this.unincorporatedBounds, 0, freshBounds = new TypeBound[this.unincorporatedBoundsCount], 0, this.unincorporatedBoundsCount);
-			this.unincorporatedBoundsCount = 0;
+		try {
+			do {
+				TypeBound [] freshBounds;
+				System.arraycopy(this.unincorporatedBounds, 0, freshBounds = new TypeBound[this.unincorporatedBoundsCount], 0, this.unincorporatedBoundsCount);
+				this.unincorporatedBoundsCount = 0;
 
-			// Pairwise bidirectional compare all bounds from previous generation with the fresh set.
-			if (!incorporate(context, this.incorporatedBounds, freshBounds))
-				return false;
-			// Pairwise bidirectional compare all fresh bounds.
-			if (!incorporate(context, freshBounds, freshBounds))
-				return false;
+				// Pairwise bidirectional compare all bounds from previous generation with the fresh set.
+				if (!incorporate(context, this.incorporatedBounds, freshBounds))
+					return false;
+				// Pairwise bidirectional compare all fresh bounds.
+				if (!incorporate(context, freshBounds, freshBounds))
+					return false;
 
-			// Merge the bounds into one incorporated generation.
-			final int incorporatedLength = this.incorporatedBounds.length;
-			final int unincorporatedLength = freshBounds.length;
-			TypeBound [] aggregate = new TypeBound[incorporatedLength + unincorporatedLength];
-			System.arraycopy(this.incorporatedBounds, 0, aggregate, 0, incorporatedLength);
-			System.arraycopy(freshBounds, 0, aggregate, incorporatedLength, unincorporatedLength);
-			this.incorporatedBounds = aggregate;
+				// Merge the bounds into one incorporated generation.
+				final int incorporatedLength = this.incorporatedBounds.length;
+				final int unincorporatedLength = freshBounds.length;
+				TypeBound [] aggregate = new TypeBound[incorporatedLength + unincorporatedLength];
+				System.arraycopy(this.incorporatedBounds, 0, aggregate, 0, incorporatedLength);
+				System.arraycopy(freshBounds, 0, aggregate, incorporatedLength, unincorporatedLength);
+				this.incorporatedBounds = aggregate;
 
-		} while (this.unincorporatedBoundsCount > 0);
-
+			} while (this.unincorporatedBoundsCount > 0);
+		} finally {
+			if (InferenceContext18.DEBUG) {
+				System.out.println("Incorporated:\n"+this); //$NON-NLS-1$
+			}
+		}
 		return true;
 	}
 	/**
@@ -983,8 +988,12 @@ class BoundSet {
 	 */
 	public boolean reduceOneConstraint(InferenceContext18 context, ConstraintFormula currentConstraint) throws InferenceFailureException {
 		Object result = currentConstraint.reduce(context);
-		if (result == ReductionResult.FALSE)
+		if (result == ReductionResult.FALSE) {
+			if (InferenceContext18.DEBUG) {
+				System.out.println("Couldn't reduce constraint "+currentConstraint+ " in\n"+context); //$NON-NLS-1$ //$NON-NLS-2$
+			}
 			return false;
+		}
 		if (result == ReductionResult.TRUE)
 			return true;
 		if (result == currentConstraint) {
@@ -1052,7 +1061,7 @@ class BoundSet {
 		Map<InferenceVariable, Set<InferenceVariable>> allEdges = new HashMap<>();
 		for (int i = 0; i < inferenceVariables.length; i++) {
 			InferenceVariable iv1 = inferenceVariables[i];
-			HashSet<InferenceVariable> targetSet = new HashSet<InferenceVariable>();
+			Set<InferenceVariable> targetSet = new LinkedHashSet<>();
 			allEdges.put(iv1, targetSet); // eventually ensures: forall iv in inferenceVariables : allEdges.get(iv) != null
 			for (int j = 0; j < i; j++) {
 				InferenceVariable iv2 = inferenceVariables[j];
@@ -1063,10 +1072,10 @@ class BoundSet {
 			}
 		}
 		// collect all connected IVs into one component:
-		Set<InferenceVariable> visited = new HashSet<>();
+		Set<InferenceVariable> visited = new LinkedHashSet<>();
 		List<Set<InferenceVariable>> allComponents = new ArrayList<>();
 		for (InferenceVariable inferenceVariable : inferenceVariables) {
-			Set<InferenceVariable> component = new HashSet<>();
+			Set<InferenceVariable> component = new LinkedHashSet<>();
 			addConnected(component, inferenceVariable, allEdges, visited);
 			if (!component.isEmpty())
 				allComponents.add(component);
@@ -1143,7 +1152,7 @@ class BoundSet {
 	// debugging:
 	@Override
 	public String toString() {
-		StringBuffer buf = new StringBuffer("Type Bounds:\n"); //$NON-NLS-1$
+		StringBuilder buf = new StringBuilder("Type Bounds:\n"); //$NON-NLS-1$
 		TypeBound[] flattened = flatten();
 		for (int i = 0; i < flattened.length; i++) {
 			buf.append('\t').append(flattened[i].toString()).append('\n');
@@ -1293,5 +1302,15 @@ class BoundSet {
 			}
 		}
 		return null;
+	}
+	public TypeBinding[] condition18_5_5_item_4(
+			ReferenceBinding rAlpha,
+			InferenceVariable[] alpha,
+			TypeBinding tPrime, InferenceContext18 ctx18) {
+		/* If T' is a parameterization of a generic class G, and there exists a supertype
+		 *  of R<α1, ..., αn> that is also a parameterization of G, let R' be that supertype.
+		 */
+		return tPrime.isParameterizedType() ?
+				superTypesWithCommonGenericType(rAlpha, tPrime) : null;
 	}
 }

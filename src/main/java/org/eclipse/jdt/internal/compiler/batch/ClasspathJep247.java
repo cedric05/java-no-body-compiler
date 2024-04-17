@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2018, 2020 IBM Corporation.
+ * Copyright (c) 2018, 2023 IBM Corporation.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v2.0
  * which accompanies this distribution, and is available at
@@ -7,15 +7,13 @@
  *
  * Contributors:
  *     IBM Corporation - initial API and implementation
+ *     Christoph Läubrich - use Filesystem helper method
  *******************************************************************************/
 package org.eclipse.jdt.internal.compiler.batch;
 
 import java.io.File;
 import java.io.IOException;
-import java.net.URI;
 import java.nio.file.DirectoryStream;
-import java.nio.file.FileSystemNotFoundException;
-import java.nio.file.FileSystems;
 import java.nio.file.FileVisitResult;
 import java.nio.file.FileVisitor;
 import java.nio.file.Files;
@@ -35,15 +33,17 @@ import org.eclipse.jdt.internal.compiler.classfmt.ClassFileConstants;
 import org.eclipse.jdt.internal.compiler.classfmt.ClassFileReader;
 import org.eclipse.jdt.internal.compiler.classfmt.ClassFormatException;
 import org.eclipse.jdt.internal.compiler.env.AccessRuleSet;
+import org.eclipse.jdt.internal.compiler.env.IBinaryType;
 import org.eclipse.jdt.internal.compiler.env.IModule;
 import org.eclipse.jdt.internal.compiler.env.NameEnvironmentAnswer;
 import org.eclipse.jdt.internal.compiler.impl.CompilerOptions;
+import org.eclipse.jdt.internal.compiler.util.CtSym;
 import org.eclipse.jdt.internal.compiler.util.JRTUtil;
 import org.eclipse.jdt.internal.compiler.util.Util;
 
 public class ClasspathJep247 extends ClasspathJrt {
 
-	protected java.nio.file.FileSystem fs = null;
+	protected java.nio.file.FileSystem fs;
 	protected String compliance = null;
 	protected long jdklevel;
 	protected String releaseInHex = null;
@@ -75,12 +75,13 @@ public class ClasspathJep247 extends ClasspathJrt {
 
 		try {
 			//TODO: Check if any conversion needed for path separator
-			ClassFileReader reader = null;
+			IBinaryType reader = null;
 			byte[] content = null;
 			qualifiedBinaryFileName = qualifiedBinaryFileName.replace(".class", ".sig"); //$NON-NLS-1$ //$NON-NLS-2$
+			Path p = null;
 			if (this.subReleases != null && this.subReleases.length > 0) {
 				for (String rel : this.subReleases) {
-					Path p = this.fs.getPath(rel, qualifiedBinaryFileName);
+					p = this.fs.getPath(rel, qualifiedBinaryFileName);
 					if (Files.exists(p)) {
 						content = JRTUtil.safeReadBytes(p);
 						if (content != null)
@@ -88,10 +89,12 @@ public class ClasspathJep247 extends ClasspathJrt {
 					}
 				}
 			} else {
-				content = JRTUtil.safeReadBytes(this.fs.getPath(this.releaseInHex, qualifiedBinaryFileName));
+				p = this.fs.getPath(this.releaseInHex, qualifiedBinaryFileName);
+				content = JRTUtil.safeReadBytes(p);
 			}
 			if (content != null) {
-				reader = new ClassFileReader(content, qualifiedBinaryFileName.toCharArray());
+				reader = new ClassFileReader(p.toUri(), content, qualifiedBinaryFileName.toCharArray());
+				reader = maybeDecorateForExternalAnnotations(qualifiedBinaryFileName, reader);
 				char[] modName = moduleName != null ? moduleName.toCharArray() : null;
 				return new NameEnvironmentAnswer(reader, fetchAccessRestriction(qualifiedBinaryFileName), modName);
 			}
@@ -106,22 +109,12 @@ public class ClasspathJep247 extends ClasspathJrt {
 		if (this.compliance == null) {
 			return;
 		}
-		this.releaseInHex = Integer.toHexString(Integer.parseInt(this.compliance)).toUpperCase();
+		this.releaseInHex = CtSym.getReleaseCode(this.compliance);
 		Path filePath = this.jdkHome.toPath().resolve("lib").resolve("ct.sym"); //$NON-NLS-1$ //$NON-NLS-2$
-		URI t = filePath.toUri();
 		if (!Files.exists(filePath)) {
 			return;
 		}
-		URI uri = URI.create("jar:file:" + t.getRawPath()); //$NON-NLS-1$
-		try {
-			this.fs = FileSystems.getFileSystem(uri);
-		} catch(FileSystemNotFoundException fne) {
-			// Ignore and move on
-		}
-		if (this.fs == null) {
-			HashMap<String, ?> env = new HashMap<>();
-			this.fs = FileSystems.newFileSystem(uri, env);
-		}
+		this.fs = JRTUtil.getJarFileSystem(filePath);
 		this.releasePath = this.fs.getPath("/"); //$NON-NLS-1$
 		if (!Files.exists(this.fs.getPath(this.releaseInHex))) {
 			throw new IllegalArgumentException("release " + this.compliance + " is not found in the system");  //$NON-NLS-1$//$NON-NLS-2$
@@ -140,55 +133,62 @@ public class ClasspathJep247 extends ClasspathJrt {
 			throw new IllegalArgumentException("release " + this.compliance + " is not found in the system");  //$NON-NLS-1$//$NON-NLS-2$
 		}
 		this.modulePath = this.file.getPath() + "|" + modPath.toString(); //$NON-NLS-1$
-		Map<String, IModule> cache = ModulesCache.get(this.modulePath);
-		if (cache == null) {
+		Map<String, IModule> cache = ModulesCache.computeIfAbsent(this.modulePath, key -> {
+			Map<String,IModule> newCache = new HashMap<>();
 			try (DirectoryStream<java.nio.file.Path> stream = Files.newDirectoryStream(modPath)) {
-				HashMap<String,IModule> newCache = new HashMap<>();
 				for (final java.nio.file.Path subdir: stream) {
-						Files.walkFileTree(subdir, new FileVisitor<java.nio.file.Path>() {
+					Files.walkFileTree(subdir, new FileVisitor<java.nio.file.Path>() {
 
-							@Override
-							public FileVisitResult preVisitDirectory(java.nio.file.Path dir, BasicFileAttributes attrs)
-									throws IOException {
-								return FileVisitResult.CONTINUE;
-							}
+						@Override
+						public FileVisitResult preVisitDirectory(java.nio.file.Path dir, BasicFileAttributes attrs)
+								throws IOException {
+							return FileVisitResult.CONTINUE;
+						}
 
-							@Override
-							public FileVisitResult visitFile(java.nio.file.Path f, BasicFileAttributes attrs) throws IOException {
-								byte[] content = null;
-								if (Files.exists(f)) {
-									content = JRTUtil.safeReadBytes(f);
-									if (content == null)
-										return FileVisitResult.CONTINUE;
-									ClasspathJep247.this.acceptModule(content, newCache);
-									ClasspathJep247.this.moduleNamesCache.add(JRTUtil.sanitizedFileName(f));
+						@Override
+						public FileVisitResult visitFile(java.nio.file.Path f, BasicFileAttributes attrs) throws IOException {
+							byte[] content = null;
+							if (Files.exists(f)) {
+								content = JRTUtil.safeReadBytes(f);
+								if (content == null) {
+									return FileVisitResult.CONTINUE;
 								}
-								return FileVisitResult.CONTINUE;
+								try {
+									ClasspathJep247.this.acceptModule(new ClassFileReader(f.toUri(), content, f.getFileName().toString().toCharArray()), newCache);
+								} catch (ClassFormatException e) {
+									e.printStackTrace();
+								}
 							}
+							return FileVisitResult.CONTINUE;
+						}
 
-							@Override
-							public FileVisitResult visitFileFailed(java.nio.file.Path f, IOException exc) throws IOException {
-								return FileVisitResult.CONTINUE;
-							}
+						@Override
+						public FileVisitResult visitFileFailed(java.nio.file.Path f, IOException exc) throws IOException {
+							return FileVisitResult.CONTINUE;
+						}
 
-							@Override
-							public FileVisitResult postVisitDirectory(java.nio.file.Path dir, IOException exc) throws IOException {
-								return FileVisitResult.CONTINUE;
-							}
-						});
-				}
-				synchronized(ModulesCache) {
-					if (ModulesCache.get(this.modulePath) == null) {
-						ModulesCache.put(this.modulePath, Collections.unmodifiableMap(newCache));
-					}
+						@Override
+						public FileVisitResult postVisitDirectory(java.nio.file.Path dir, IOException exc) throws IOException {
+							return FileVisitResult.CONTINUE;
+						}
+					});
 				}
 			} catch (IOException e) {
-				e.printStackTrace();
+				String error = "Failed to walk modules for " + key; //$NON-NLS-1$
+				if (JRTUtil.PROPAGATE_IO_ERRORS) {
+					throw new IllegalStateException(error, e);
+				} else {
+					System.err.println(error);
+					e.printStackTrace();
+					return null;
+				}
 			}
-		} else {
-			this.moduleNamesCache.addAll(cache.keySet());
-		}
+			return newCache.isEmpty() ? null : Collections.unmodifiableMap(newCache);
+		});
+
+		this.moduleNamesCache.addAll(cache.keySet());
 	}
+
 	@Override
 	void acceptModule(ClassFileReader reader, Map<String, IModule> cache) {
 		// Modules below level 9 are not dealt with here. Leave it to ClasspathJrt
@@ -249,8 +249,14 @@ public class ClasspathJep247 extends ClasspathJrt {
 					});
 				}
 			} catch (IOException e) {
-				e.printStackTrace();
-				// Rethrow
+				String error = "Failed to find module " + moduleName + " defining package " + qualifiedPackageName //$NON-NLS-1$ //$NON-NLS-2$
+						+ " in release " + this.releasePath + " in " + this; //$NON-NLS-1$ //$NON-NLS-2$
+				if (JRTUtil.PROPAGATE_IO_ERRORS) {
+					throw new IllegalStateException(error, e);
+				} else {
+					System.err.println(error);
+					e.printStackTrace();
+				}
 			}
 			this.subReleases = sub.toArray(new String[sub.size()]);
 		}
@@ -261,15 +267,7 @@ public class ClasspathJep247 extends ClasspathJrt {
 		}
 		return singletonModuleNameIf(this.packageCache.contains(qualifiedPackageName));
 	}
-	@Override
-	public void reset() {
-		try {
-			super.reset();
-			this.fs.close();
-		} catch (IOException e) {
-			// Move on
-		}
-	}
+
 	@Override
 	public String toString() {
 		return "Classpath for JEP 247 for JDK " + this.file.getPath(); //$NON-NLS-1$
@@ -301,6 +299,10 @@ public class ClasspathJep247 extends ClasspathJrt {
 	@Override
 	public int getMode() {
 		return BINARY;
+	}
+	@Override
+	public boolean forbidsExportFrom(String modName) {
+		return servesModule(modName.toCharArray());
 	}
 
 }

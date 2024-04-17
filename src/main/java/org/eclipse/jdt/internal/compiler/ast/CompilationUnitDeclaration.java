@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2019 IBM Corporation and others.
+ * Copyright (c) 2000, 2024 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -15,6 +15,7 @@
  *							  Bug 405066 - [1.8][compiler][codegen] Implement code generation infrastructure for JSR335
  *     Frits Jalvingh    - contributions for bug 533830.
  *     Red Hat Inc.	     - add module-info Javadoc support
+ *     Red Hat Inc.      - add NLS support for Text Blocks
  *******************************************************************************/
 package org.eclipse.jdt.internal.compiler.ast;
 
@@ -76,8 +77,6 @@ public class CompilationUnitDeclaration extends ASTNode implements ProblemSeveri
 	public int[][] comments;
 
 	public boolean ignoreFurtherInvestigation = false; // once pointless to investigate due to errors
-	// below is the only code line change from ecj jar
-	// public boolean ignoreMethodBodies = false;
 	public boolean ignoreMethodBodies = true;
 	public CompilationUnitScope scope;
 	public ProblemReporter problemReporter;
@@ -246,6 +245,7 @@ public TypeDeclaration declarationOfType(char[][] typeName) {
 }
 
 public void finalizeProblems() {
+	this.compilationResult.materializeProblems();
 	int problemCount = this.compilationResult.problemCount;
 	CategorizedProblem[] problems = this.compilationResult.problems;
 	if (this.suppressWarningsCount == 0) {
@@ -488,7 +488,7 @@ public boolean hasErrors() {
 }
 
 @Override
-public StringBuffer print(int indent, StringBuffer output) {
+public StringBuilder print(int indent, StringBuilder output) {
 	if (this.currentPackage != null) {
 		printIndent(indent, output).append("package "); //$NON-NLS-1$
 		this.currentPackage.print(0, output, false).append(";\n"); //$NON-NLS-1$
@@ -712,7 +712,7 @@ private void reportNLSProblems() {
 			int i = 0;
 			stringLiteralsLoop: for (; i < stringLiteralsLength; i++) {
 				literal = this.stringLiterals[i];
-				final int literalLineNumber = literal.lineNumber;
+				final int literalLineNumber = literal instanceof TextBlock ? ((TextBlock)literal).endLineNumber : literal.getLineNumber();
 				if (lastLineNumber != literalLineNumber) {
 					indexInLine = 1;
 					lastLineNumber = literalLineNumber;

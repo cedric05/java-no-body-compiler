@@ -31,8 +31,6 @@ public class AnnotationBinding {
  * Add the standard annotations encoded in the tag bits to the recorded annotations.
  *
  * @param recordedAnnotations existing annotations already created
- * @param annotationTagBits
- * @param env
  * @return the combined list of annotations
  */
 public static AnnotationBinding[] addStandardAnnotations(AnnotationBinding[] recordedAnnotations, long annotationTagBits, LookupEnvironment env) {
@@ -252,7 +250,7 @@ public static void setMethodBindings(ReferenceBinding type, ElementValuePair[] p
 
 @Override
 public String toString() {
-	StringBuffer buffer = new StringBuffer(5);
+	StringBuilder buffer = new StringBuilder(5);
 	buffer.append('@').append(this.type.sourceName);
 	if (this.pairs != null && this.pairs.length > 0) {
 		buffer.append('(');

@@ -17,11 +17,13 @@
  *******************************************************************************/
 package org.eclipse.jdt.internal.compiler.env;
 
+import java.net.URI;
+
 import org.eclipse.jdt.core.compiler.CharOperation;
 import org.eclipse.jdt.internal.compiler.lookup.BinaryTypeBinding.ExternalAnnotationStatus;
 import org.eclipse.jdt.internal.compiler.lookup.LookupEnvironment;
 
-public interface IBinaryType extends IGenericType {
+public interface IBinaryType extends IGenericType, IBinaryInfo {
 
 	char[][] NoInterface = CharOperation.NO_CHAR_CHAR;
 	IBinaryNestedType[] NoNestedType = new IBinaryNestedType[0];
@@ -199,5 +201,7 @@ ITypeAnnotationWalker enrichWithExternalAnnotationsFor(ITypeAnnotationWalker wal
  * Answer whether a provider for external annotations is associated with this binary type.
  */
 ExternalAnnotationStatus getExternalAnnotationStatus();
-
+default URI getURI() {
+	return null;
+}
 }

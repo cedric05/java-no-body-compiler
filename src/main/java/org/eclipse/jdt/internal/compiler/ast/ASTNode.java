@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2021 IBM Corporation and others.
+ * Copyright (c) 2000, 2023 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -56,12 +56,14 @@ import java.util.Map;
 
 import org.eclipse.jdt.core.compiler.CharOperation;
 import org.eclipse.jdt.internal.compiler.ASTVisitor;
+import org.eclipse.jdt.internal.compiler.ast.TypeReference.AnnotationPosition;
 import org.eclipse.jdt.internal.compiler.classfmt.ClassFileConstants;
 import org.eclipse.jdt.internal.compiler.env.AccessRestriction;
 import org.eclipse.jdt.internal.compiler.lookup.AnnotationBinding;
 import org.eclipse.jdt.internal.compiler.lookup.ArrayBinding;
 import org.eclipse.jdt.internal.compiler.lookup.Binding;
 import org.eclipse.jdt.internal.compiler.lookup.BlockScope;
+import org.eclipse.jdt.internal.compiler.lookup.ClassScope;
 import org.eclipse.jdt.internal.compiler.lookup.ExtraCompilerModifiers;
 import org.eclipse.jdt.internal.compiler.lookup.FieldBinding;
 import org.eclipse.jdt.internal.compiler.lookup.InferenceContext18;
@@ -73,6 +75,7 @@ import org.eclipse.jdt.internal.compiler.lookup.ModuleBinding;
 import org.eclipse.jdt.internal.compiler.lookup.PackageBinding;
 import org.eclipse.jdt.internal.compiler.lookup.ParameterizedGenericMethodBinding;
 import org.eclipse.jdt.internal.compiler.lookup.ParameterizedMethodBinding;
+import org.eclipse.jdt.internal.compiler.lookup.ParameterizedTypeBinding;
 import org.eclipse.jdt.internal.compiler.lookup.ProblemMethodBinding;
 import org.eclipse.jdt.internal.compiler.lookup.ProblemReasons;
 import org.eclipse.jdt.internal.compiler.lookup.RecordComponentBinding;
@@ -99,14 +102,14 @@ public abstract class ASTNode implements TypeConstants, TypeIds {
 	public final static int Bit4 = 0x8;					// return type (operator) | first assignment to local (name ref,local decl) | undocumented empty block (block, type and method decl)
 	public final static int Bit5 = 0x10;					// value for return (expression) | has all method bodies (unit) | supertype ref (type ref) | resolved (field decl)| name ref (yield result value)
 	public final static int Bit6 = 0x20;					// depth (name ref, msg) | ignore need cast check (cast expression) | error in signature (method declaration/ initializer) | is recovered (annotation reference)
-	public final static int Bit7 = 0x40;					// depth (name ref, msg) | need runtime checkcast (cast expression) | label used (labelStatement) | needFreeReturn (AbstractMethodDeclaration)
+	public final static int Bit7 = 0x40;					// depth (name ref, msg) | need runtime checkcast (cast expression) | label used (labelStatement) | needFreeReturn (AbstractMethodDeclaration) | Used in Pattern Guard expression (NameReference)
 	public final static int Bit8 = 0x80;					// depth (name ref, msg) | unsafe cast (cast expression) | is default constructor (constructor declaration) | isElseStatementUnreachable (if statement)
 	public final static int Bit9 = 0x100;				// depth (name ref, msg) | operator (operator) | is local type (type decl) | isThenStatementUnreachable (if statement) | can be static
 	public final static int Bit10= 0x200;				// depth (name ref, msg) | operator (operator) | is anonymous type (type decl) | is implicit constructor (constructor)
 	public final static int Bit11 = 0x400;				// depth (name ref, msg) | operator (operator) | is member type (type decl)
 	public final static int Bit12 = 0x800;				// depth (name ref, msg) | operator (operator) | has abstract methods (type decl)
 	public final static int Bit13 = 0x1000;			// depth (name ref, msg) | operator (operator) | is secondary type (type decl)
-	public final static int Bit14 = 0x2000;			// strictly assigned (reference lhs) | operator (operator) | discard enclosing instance (explicit constr call) | hasBeenGenerated (type decl)
+	public final static int Bit14 = 0x2000;			// strictly assigned (reference lhs) | discard enclosing instance (explicit constr call) | hasBeenGenerated (type decl)
 	public final static int Bit15 = 0x4000;			// is unnecessary cast (expression) | is varargs (type ref) | isSubRoutineEscaping (try statement) | superAccess (javadoc allocation expression/javadoc message send/javadoc return statement)
 	public final static int Bit16 = 0x8000;			// in javadoc comment (name ref, type ref, msg)
 	public final static int Bit17 = 0x10000;			// compound assigned (reference lhs) | unchecked (msg, alloc, explicit constr call)
@@ -165,7 +168,7 @@ public abstract class ASTNode implements TypeConstants, TypeIds {
 	// for operators
 	public static final int ReturnTypeIDMASK = Bit1|Bit2|Bit3|Bit4;
 	public static final int OperatorSHIFT = 8;	// Bit9 -> Bit14
-	public static final int OperatorMASK = Bit9|Bit10|Bit11|Bit12|Bit13|Bit14; // 6 bits for operator ID
+	public static final int OperatorMASK = Bit9|Bit10|Bit11|Bit12|Bit13; // 5 bits for operator ID - see org.eclipse.jdt.internal.compiler.ast.OperatorIds
 
 	// for binary expressions
 	public static final int IsReturnedValue = Bit5;
@@ -199,6 +202,7 @@ public abstract class ASTNode implements TypeConstants, TypeIds {
 	public static final int DepthSHIFT = 5;	// Bit6 -> Bit13
 	public static final int DepthMASK = Bit6|Bit7|Bit8|Bit9|Bit10|Bit11|Bit12|Bit13; // 8 bits for actual depth value (max. 255)
 	public static final int IsCapturedOuterLocal = Bit20;
+	public static final int IsUsedInPatternGuard = Bit7;
 	public static final int IsSecretYieldValueUsage = Bit5;
 
 	// for statements
@@ -344,6 +348,8 @@ public abstract class ASTNode implements TypeConstants, TypeIds {
 
 	public static final Argument [] NO_ARGUMENTS = new Argument [0];
 	public static final RecordComponent [] NO_RECORD_COMPONENTS = new RecordComponent [0];
+	public static final TypePattern[] NO_TYPE_PATTERNS = new TypePattern[0];
+	public static final LocalVariableBinding[] NO_VARIABLES = new LocalVariableBinding[0];
 
 	public ASTNode() {
 
@@ -351,7 +357,18 @@ public abstract class ASTNode implements TypeConstants, TypeIds {
 	}
 	private static int checkInvocationArgument(BlockScope scope, Expression argument, TypeBinding parameterType, TypeBinding argumentType, TypeBinding originalParameterType) {
 		argument.computeConversion(scope, parameterType, argumentType);
-
+		if (argument instanceof AllocationExpression) {
+			AllocationExpression allocExp = (AllocationExpression) argument;
+			// we need this only when the error is not reported in AllocationExpression#checkTypeArgumentRedundancy()
+			if (allocExp.typeExpected == null && !allocExp.expectedTypeWasInferred) {
+				final boolean isDiamond = allocExp.type != null && (allocExp.type.bits & ASTNode.IsDiamond) != 0;
+				allocExp.typeExpected = parameterType;
+				if (!isDiamond && allocExp.resolvedType.isParameterizedTypeWithActualArguments()) {
+					ParameterizedTypeBinding pbinding = (ParameterizedTypeBinding) allocExp.resolvedType;
+					scope.problemReporter().redundantSpecificationOfTypeArguments(allocExp.type, pbinding.arguments);
+				}
+			}
+		}
 		if (argumentType != TypeBinding.NULL && parameterType.kind() == Binding.WILDCARD_TYPE) { // intersection types are tolerated
 			WildcardBinding wildcard = (WildcardBinding) parameterType;
 			if (wildcard.boundKind != Wildcard.SUPER) {
@@ -638,9 +655,19 @@ public abstract class ASTNode implements TypeConstants, TypeIds {
 		return true;
 	}
 
-	public abstract StringBuffer print(int indent, StringBuffer output);
 
-	public static StringBuffer printAnnotations(Annotation[] annotations, StringBuffer output) {
+	/**
+	 * Returns whether this node represents a binding of type {@link Binding#TYPE}
+	 *
+	 * @return <code>true</code> if the node represents a {@link Binding#TYPE} binding type.
+	 */
+	public boolean isType() {
+		return false;
+	}
+
+	public abstract StringBuilder print(int indent, StringBuilder output);
+
+	public static StringBuilder printAnnotations(Annotation[] annotations, StringBuilder output) {
 		int length = annotations.length;
 		for (int i = 0; i < length; i++) {
 			if (i > 0) {
@@ -656,13 +683,13 @@ public abstract class ASTNode implements TypeConstants, TypeIds {
 		return output;
 	}
 
-	public static StringBuffer printIndent(int indent, StringBuffer output) {
+	public static StringBuilder printIndent(int indent, StringBuilder output) {
 
 		for (int i = indent; i > 0; i--) output.append("  "); //$NON-NLS-1$
 		return output;
 	}
 
-	public static StringBuffer printModifiers(int modifiers, StringBuffer output) {
+	public static StringBuilder printModifiers(int modifiers, StringBuilder output) {
 
 		if ((modifiers & ClassFileConstants.AccPublic) != 0)
 			output.append("public "); //$NON-NLS-1$
@@ -693,6 +720,15 @@ public abstract class ASTNode implements TypeConstants, TypeIds {
 		return output;
 	}
 
+	public static void resolveStatements(Statement[] statements, BlockScope scope) {
+		LocalVariableBinding [] livePatternVariables = NO_VARIABLES;
+		for (int i = 0, length = statements.length; i < length; i++) {
+			final Statement stmt = statements[i];
+			stmt.resolveWithBindings(livePatternVariables, scope);
+			livePatternVariables = LocalVariableBinding.merge(livePatternVariables, stmt.bindingsWhenComplete());
+		}
+	}
+
 	/**
 	 * After method lookup has produced 'methodBinding' but when poly expressions have been seen as arguments,
 	 * inspect the arguments to trigger another round of resolving with improved target types from the methods parameters.
@@ -705,6 +741,16 @@ public abstract class ASTNode implements TypeConstants, TypeIds {
 	 * @return either the original method or a problem method
 	 */
 	public static MethodBinding resolvePolyExpressionArguments(Invocation invocation, MethodBinding method, TypeBinding[] argumentTypes, BlockScope scope) {
+		ClassScope cScope = scope.enclosingClassScope();
+		boolean resolvingPolyExpressionArguments = cScope.resolvingPolyExpressionArguments;
+		try {
+			cScope.resolvingPolyExpressionArguments = true;
+			return resolvePolyExpressionArguments0(invocation, method, argumentTypes, scope);
+		} finally {
+			cScope.resolvingPolyExpressionArguments = resolvingPolyExpressionArguments;
+		}
+	}
+	private static MethodBinding resolvePolyExpressionArguments0(Invocation invocation, MethodBinding method, TypeBinding[] argumentTypes, BlockScope scope) {
 		MethodBinding candidateMethod = method.isValidBinding() ? method : method instanceof ProblemMethodBinding ? ((ProblemMethodBinding) method).closestMatch : null;
 		if (candidateMethod == null)
 			return method;
@@ -763,7 +809,7 @@ public abstract class ASTNode implements TypeConstants, TypeIds {
 		}
 		if (method instanceof ParameterizedGenericMethodBinding) {
 			InferenceContext18 ic18 = invocation.getInferenceContext((ParameterizedMethodBinding) method);
-			if (ic18 != null)
+			if (ic18 != null && !ic18.isInexactVarargsInference())
 				ic18.flushBoundOutbox(); // overload resolution is done, now perform the push of bounds from inner to outer
 		}
 		if (problemMethod != null)
@@ -839,8 +885,11 @@ public abstract class ASTNode implements TypeConstants, TypeIds {
 					}
 					break;
 				case Binding.TYPE_PARAMETER :
+					((TypeVariableBinding) recipient).tagBits |= TagBits.AnnotationResolved;
+					//$FALL-THROUGH$
 				case Binding.TYPE_USE :
-					// deliberately don't set the annotation resolved tagbits, it is not material and also we are working with a dummy static object.
+					// for TYPE_USE we deliberately don't set the annotation resolved tagbits,
+					// it is not material and also we are working with a dummy static object.
 					annotations = new AnnotationBinding[length];
 					break;
 				case Binding.MODULE:
@@ -1023,7 +1072,7 @@ public abstract class ASTNode implements TypeConstants, TypeIds {
 	    By construction the bindings associated with QTR, PQTR etc get resolved first and then annotations for different levels get resolved
 	    and applied at one go. Likewise for multidimensional arrays.
 
-	    @Returns the annotated type binding.
+	    @return the annotated type binding.
 	*/
 	public static TypeBinding resolveAnnotations(BlockScope scope, Annotation[][] sourceAnnotations, TypeBinding type) {
 		int levels = sourceAnnotations == null ? 0 : sourceAnnotations.length;
@@ -1043,7 +1092,6 @@ public abstract class ASTNode implements TypeConstants, TypeIds {
 	/**
 	 * "early" handling of NonNullByDefault because for local variables annotations are resolved after their type because of bug
 	 * 96991.
-	 * @param localDeclaration
 	 */
 	public static void handleNonNullByDefault(BlockScope scope, Annotation[] sourceAnnotations, LocalDeclaration localDeclaration) {
 		if (sourceAnnotations == null || sourceAnnotations.length == 0) {
@@ -1145,7 +1193,8 @@ public abstract class ASTNode implements TypeConstants, TypeIds {
 					if (Annotation.isTypeUseCompatible(typeRef, scope)) { // discard hybrid annotations on name qualified types.
 						local.declaration.bits |= HasTypeAnnotations;
 						typeRef.bits |= HasTypeAnnotations;
-						local.type = mergeAnnotationsIntoType(scope, se8Annotations, se8nullBits, se8NullAnnotation, typeRef, local.type);
+						int location = local.isParameter() ? Binding.DefaultLocationParameter : 0 /*no default for locals*/;
+						local.type = mergeAnnotationsIntoType(scope, se8Annotations, se8nullBits, se8NullAnnotation, typeRef, location, local.type);
 						if(scope.environment().usesNullTypeAnnotations()) {
 							local.tagBits &= ~(se8nullBits);
 						}
@@ -1158,7 +1207,8 @@ public abstract class ASTNode implements TypeConstants, TypeIds {
 					if (Annotation.isTypeUseCompatible(fieldDeclaration.type, scope)) { // discard hybrid annotations on name qualified types.
 						fieldDeclaration.bits |= HasTypeAnnotations;
 						fieldDeclaration.type.bits |= HasTypeAnnotations;
-						field.type = mergeAnnotationsIntoType(scope, se8Annotations, se8nullBits, se8NullAnnotation, fieldDeclaration.type, field.type);
+						field.type = mergeAnnotationsIntoType(scope, se8Annotations, se8nullBits, se8NullAnnotation,
+								fieldDeclaration.type, Binding.DefaultLocationField, field.type);
 						if(scope.environment().usesNullTypeAnnotations()) {
 							field.tagBits &= ~(se8nullBits);
 						}
@@ -1170,7 +1220,8 @@ public abstract class ASTNode implements TypeConstants, TypeIds {
 					if (Annotation.isTypeUseCompatible(recordComponent.type, scope)) { // discard hybrid annotations on name qualified types.
 						recordComponent.bits |= HasTypeAnnotations;
 						recordComponent.type.bits |= HasTypeAnnotations;
-						recordComponentBinding.type = mergeAnnotationsIntoType(scope, se8Annotations, se8nullBits, se8NullAnnotation, recordComponent.type, recordComponentBinding.type);
+						recordComponentBinding.type = mergeAnnotationsIntoType(scope, se8Annotations, se8nullBits, se8NullAnnotation, recordComponent.type,
+								Binding.DefaultLocationField, recordComponentBinding.type);
 						if(scope.environment().usesNullTypeAnnotations()) { //TODO Bug 562478
 							recordComponentBinding.tagBits &= ~(se8nullBits);
 						}
@@ -1184,7 +1235,8 @@ public abstract class ASTNode implements TypeConstants, TypeIds {
 						if (Annotation.isTypeUseCompatible(methodDecl.returnType, scope)) {
 							methodDecl.bits |= HasTypeAnnotations;
 							methodDecl.returnType.bits |= HasTypeAnnotations;
-							method.returnType = mergeAnnotationsIntoType(scope, se8Annotations, se8nullBits, se8NullAnnotation, methodDecl.returnType, method.returnType);
+							method.returnType = mergeAnnotationsIntoType(scope, se8Annotations, se8nullBits, se8NullAnnotation,
+									methodDecl.returnType, Binding.DefaultLocationReturnType, method.returnType);
 							if(scope.environment().usesNullTypeAnnotations()) {
 								method.tagBits &= ~(se8nullBits);
 							}
@@ -1266,7 +1318,7 @@ public abstract class ASTNode implements TypeConstants, TypeIds {
 	}
 
 	private static TypeBinding mergeAnnotationsIntoType(BlockScope scope, AnnotationBinding[] se8Annotations, long se8nullBits, Annotation se8NullAnnotation,
-			TypeReference typeRef, TypeBinding existingType)
+			TypeReference typeRef, int location, TypeBinding existingType)
 	{
 		if (existingType == null || !existingType.isValidBinding()) return existingType;
 		TypeReference unionRef = typeRef.isUnionType() ? ((UnionTypeReference) typeRef).typeReferences[0] : null;
@@ -1286,27 +1338,41 @@ public abstract class ASTNode implements TypeConstants, TypeIds {
 			return existingType;
 		}
 
+		if (typeRef.dimensions() > 0) {
+			location = Binding.DefaultLocationArrayContents; // moving from SE7 to SE8 position applies to the array contents!
+		}
+
 		long prevNullBits = oldLeafType.tagBits & TagBits.AnnotationNullMASK;
-		if ((prevNullBits | se8nullBits) == TagBits.AnnotationNullMASK) { // contradiction after merge?
+		if ((prevNullBits | se8nullBits) == TagBits.AnnotationNullMASK && typeRef.hasNullTypeAnnotation(AnnotationPosition.MAIN_TYPE)) {
+			// would merging introduce a contradiction?
 			if (!(oldLeafType instanceof TypeVariableBinding)) { // let type-use annotations override annotations on the type parameter declaration
 				if (prevNullBits != TagBits.AnnotationNullMASK && se8nullBits != TagBits.AnnotationNullMASK) { // conflict caused by the merge?
 					scope.problemReporter().contradictoryNullAnnotations(se8NullAnnotation);
 				}
-				se8Annotations = Binding.NO_ANNOTATIONS;
-				se8nullBits = 0;
+				se8nullBits = TagBits.AnnotationNullMASK;
 			}
 			oldLeafType = oldLeafType.withoutToplevelNullAnnotation();
+		} else if (se8nullBits == TagBits.AnnotationNonNull
+					&& location != Binding.DefaultLocationReturnType // normal return type cases are handled in MethodBinding.fillInDefaultNonNullness18()
+					&& location != Binding.DefaultLocationField      // normal field type cases are handled in FieldBinding.fillInDefaultNonNullness()
+					&& scope.hasDefaultNullnessForType(typeRef.resolvedType, location, typeRef.sourceStart)) {
+			scope.problemReporter().nullAnnotationIsRedundant(typeRef, new Annotation[] { se8NullAnnotation });
 		}
+		if (se8nullBits == TagBits.AnnotationNullMASK) {
+			// withdraw contradicting null annotations
+			se8Annotations = scope.environment().filterNullTypeAnnotations(se8Annotations);
+		}
+		if (se8Annotations.length > 0) {
+			AnnotationBinding [][] goodies = new AnnotationBinding[typeRef.getAnnotatableLevels()][];
+			goodies[0] = se8Annotations;  // @T X.Y.Z local; ==> @T should annotate X
+			TypeBinding newLeafType = scope.environment().createAnnotatedType(oldLeafType, goodies);
 
-		AnnotationBinding [][] goodies = new AnnotationBinding[typeRef.getAnnotatableLevels()][];
-		goodies[0] = se8Annotations;  // @T X.Y.Z local; ==> @T should annotate X
-		TypeBinding newLeafType = scope.environment().createAnnotatedType(oldLeafType, goodies);
-
-		if (unionRef == null) {
-			typeRef.resolvedType = existingType.isArrayType() ? scope.environment().createArrayType(newLeafType, existingType.dimensions(), existingType.getTypeAnnotations()) : newLeafType;
-		} else {
-			unionRef.resolvedType = newLeafType;
-			unionRef.bits |= HasTypeAnnotations;
+			if (unionRef == null) {
+				typeRef.resolvedType = existingType.isArrayType() ? scope.environment().createArrayType(newLeafType, existingType.dimensions(), existingType.getTypeAnnotations()) : newLeafType;
+			} else {
+				unionRef.resolvedType = newLeafType;
+				unionRef.bits |= HasTypeAnnotations;
+			}
 		}
 		return typeRef.resolvedType;
 	}
@@ -1451,7 +1517,7 @@ public static void resolveDeprecatedAnnotations(BlockScope scope, Annotation[] a
 	@Override
 	public String toString() {
 
-		return print(0, new StringBuffer(30)).toString();
+		return print(0, new StringBuilder(30)).toString();
 	}
 
 	public void traverse(ASTVisitor visitor, BlockScope scope) {

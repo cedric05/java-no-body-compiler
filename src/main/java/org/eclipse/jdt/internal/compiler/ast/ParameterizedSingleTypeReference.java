@@ -89,7 +89,7 @@ public class ParameterizedSingleTypeReference extends ArrayTypeReference {
 	 */
 	@Override
 	public char [][] getParameterizedTypeName(){
-		StringBuffer buffer = new StringBuffer(5);
+		StringBuilder buffer = new StringBuilder(5);
 		buffer.append(this.token).append('<');
 		for (int i = 0, length = this.typeArguments.length; i < length; i++) {
 			if (i > 0) buffer.append(',');
@@ -339,7 +339,7 @@ public class ParameterizedSingleTypeReference extends ArrayTypeReference {
 	}
 
 	@Override
-	public StringBuffer printExpression(int indent, StringBuffer output){
+	public StringBuilder printExpression(int indent, StringBuilder output){
 		if (this.annotations != null && this.annotations[0] != null) {
 			printAnnotations(this.annotations[0], output);
 			output.append(' ');
@@ -383,6 +383,12 @@ public class ParameterizedSingleTypeReference extends ArrayTypeReference {
 			}
 		}
 		return output;
+	}
+
+	@Override
+	public void updateWithAnnotations(Scope scope, int location) {
+		this.resolvedType = updateParameterizedTypeWithAnnotations(scope, this.resolvedType, this.typeArguments);
+		resolveAnnotations(scope, location); // see comment in super TypeReference.updateWithAnnotations()
 	}
 
 	@Override

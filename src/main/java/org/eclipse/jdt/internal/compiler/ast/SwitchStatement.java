@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2000, 2019 IBM Corporation and others.
+ * Copyright (c) 2000, 2023 IBM Corporation and others.
  *
  * This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License 2.0
@@ -19,27 +19,39 @@
  *******************************************************************************/
 package org.eclipse.jdt.internal.compiler.ast;
 
+import java.util.ArrayList;
 import java.util.Arrays;
-
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.function.IntPredicate;
 import org.eclipse.jdt.internal.compiler.ASTVisitor;
+import org.eclipse.jdt.internal.compiler.ast.CaseStatement.ResolvedCase;
 import org.eclipse.jdt.internal.compiler.classfmt.ClassFileConstants;
 import org.eclipse.jdt.internal.compiler.codegen.BranchLabel;
 import org.eclipse.jdt.internal.compiler.codegen.CaseLabel;
 import org.eclipse.jdt.internal.compiler.codegen.CodeStream;
+import org.eclipse.jdt.internal.compiler.codegen.ConstantPool;
 import org.eclipse.jdt.internal.compiler.codegen.Opcodes;
 import org.eclipse.jdt.internal.compiler.flow.FlowContext;
 import org.eclipse.jdt.internal.compiler.flow.FlowInfo;
 import org.eclipse.jdt.internal.compiler.flow.SwitchFlowContext;
 import org.eclipse.jdt.internal.compiler.impl.CompilerOptions;
 import org.eclipse.jdt.internal.compiler.impl.Constant;
+import org.eclipse.jdt.internal.compiler.impl.JavaFeature;
 import org.eclipse.jdt.internal.compiler.lookup.BlockScope;
 import org.eclipse.jdt.internal.compiler.lookup.FieldBinding;
 import org.eclipse.jdt.internal.compiler.lookup.LocalVariableBinding;
+import org.eclipse.jdt.internal.compiler.lookup.RecordComponentBinding;
 import org.eclipse.jdt.internal.compiler.lookup.ReferenceBinding;
 import org.eclipse.jdt.internal.compiler.lookup.SourceTypeBinding;
 import org.eclipse.jdt.internal.compiler.lookup.SyntheticMethodBinding;
 import org.eclipse.jdt.internal.compiler.lookup.TypeBinding;
 import org.eclipse.jdt.internal.compiler.lookup.TypeIds;
+import org.eclipse.jdt.internal.compiler.lookup.TypeVariableBinding;
 import org.eclipse.jdt.internal.compiler.problem.ProblemSeverities;
 
 @SuppressWarnings("rawtypes")
@@ -52,13 +64,21 @@ public class SwitchStatement extends Expression {
 	public BranchLabel breakLabel;
 	public CaseStatement[] cases;
 	public CaseStatement defaultCase;
+	public CaseStatement nullCase; // convenience pointer for pattern switches
 	public int blockStart;
 	public int caseCount;
 	int[] constants;
 	int[] constMapping;
-	String[] stringConstants;
-	public boolean switchLabeledRules = false; // true if case ->, false if case :
+	// Any non int constants
+	public ResolvedCase[] otherConstants;
 	public int nConstants;
+	public int switchBits;
+
+	public boolean containsPatterns;
+	public boolean containsNull;
+	private boolean nullProcessed = false;
+	BranchLabel switchPatternRestartTarget;
+	/* package */ public Pattern totalPattern;
 
 	// fallthrough
 	public final static int CASE = 0;
@@ -66,9 +86,20 @@ public class SwitchStatement extends Expression {
 	public final static int ESCAPING = 2;
 	public final static int BREAKING  = 3;
 
+	// Other bits
+	public final static int LabeledRules = ASTNode.Bit1;
+	public final static int NullCase = ASTNode.Bit2;
+	public final static int TotalPattern = ASTNode.Bit3;
+	public final static int Exhaustive = ASTNode.Bit4;
+	public final static int Enhanced = ASTNode.Bit5;
+	public final static int QualifiedEnum = ASTNode.Bit6;
+
 	// for switch on strings
 	private static final char[] SecretStringVariableName = " switchDispatchString".toCharArray(); //$NON-NLS-1$
 
+	// for patterns in switch
+	/* package */ static final char[] SecretPatternVariableName = " switchDispatchPattern".toCharArray(); //$NON-NLS-1$
+	private static final char[] SecretPatternRestartIndexName = " switchPatternRestartIndex".toCharArray(); //$NON-NLS-1$
 
 	public SyntheticMethodBinding synthetic; // use for switch on enums types
 
@@ -76,12 +107,263 @@ public class SwitchStatement extends Expression {
 	int preSwitchInitStateIndex = -1;
 	int mergedInitStateIndex = -1;
 
-	CaseStatement[] duplicateCaseStatements = null;
-	int duplicateCaseStatementsCounter = 0;
+	Statement[] duplicateCases = null;
+	int duplicateCaseCounter = 0;
 	private LocalVariableBinding dispatchStringCopy = null;
+	private LocalVariableBinding dispatchPatternCopy = null;
+	private LocalVariableBinding restartIndexLocal = null;
 
+	/* package */ boolean isNonTraditional = false;
+	/* package */ List<Pattern> caseLabelElements = new ArrayList<>(0);//TODO: can we remove this?
+	public List<TypeBinding> caseLabelElementTypes = new ArrayList<>(0);
+	int constantIndex = 0;
+
+	class Node {
+		TypeBinding type;
+		boolean hasError = false;
+		public void traverse(NodeVisitor visitor) {
+			visitor.visit(this);
+			visitor.endVisit(this);
+		}
+	}
+	class RNode extends Node {
+		TNode firstComponent;
+
+		RNode(TypeBinding rec) {
+			this.type = rec;
+			RecordComponentBinding[] comps = rec.components();
+			int len = comps != null ? comps.length : 0;
+			if (len > 0) {
+				RecordComponentBinding comp = comps[0];
+				if (comp != null && comp.type != null)
+					this.firstComponent = new TNode(comp.type);
+			}
+		}
+		void addPattern(Pattern p) {
+			if (p instanceof RecordPattern)
+				addPattern((RecordPattern)p);
+		}
+		void addPattern(RecordPattern rp) {
+			if (!TypeBinding.equalsEquals(this.type, rp.type.resolvedType))
+				return;
+			if (this.firstComponent == null)
+				return;
+			this.firstComponent.addPattern(rp, 0);
+		}
+		@Override
+		public String toString() {
+	        StringBuilder sb = new StringBuilder();
+	        sb.append("[RNode] {\n"); //$NON-NLS-1$
+	        sb.append("    type:"); //$NON-NLS-1$
+	        sb.append(this.type != null ? this.type.toString() : "null"); //$NON-NLS-1$
+	        sb.append("    firstComponent:"); //$NON-NLS-1$
+	        sb.append(this.firstComponent != null ? this.firstComponent.toString() : "null"); //$NON-NLS-1$
+	        sb.append("\n}\n"); //$NON-NLS-1$
+	        return sb.toString();
+		}
+		@Override
+		public void traverse(NodeVisitor visitor) {
+			if (this.firstComponent != null) {
+				visitor.visit(this.firstComponent);
+			}
+			visitor.endVisit(this);
+		}
+	}
+	class TNode extends Node {
+		List<PatternNode> children;
+
+		TNode(TypeBinding type) {
+			this.type = type;
+			this.children = new ArrayList<>();
+		}
+
+		public void addPattern(RecordPattern rp, int i) {
+			if (rp.patterns.length <= i) {
+				this.hasError = true;
+				return;
+			}
+			TypeBinding childType = rp.patterns[i].resolvedType;
+			PatternNode child = null;
+			for (PatternNode c : this.children) {
+				if (TypeBinding.equalsEquals(childType, c.type)) {
+					child = c;
+					break;
+				}
+			}
+			if (child == null) {
+				child = childType.isRecord() ?
+					new RecordPatternNode(childType) : new PatternNode(childType);
+				if (this.type.isSubtypeOf(childType, false))
+					this.children.add(0, child);
+				else
+					this.children.add(child);
+			}
+			if ((i+1) < rp.patterns.length) {
+				child.addPattern(rp, i + 1);
+			}
+		}
+		@Override
+		public String toString() {
+	        StringBuilder sb = new StringBuilder();
+	        sb.append("[TNode] {\n"); //$NON-NLS-1$
+	        sb.append("    type:"); //$NON-NLS-1$
+	        sb.append(this.type != null ? this.type.toString() : "null"); //$NON-NLS-1$
+	        sb.append("    children:"); //$NON-NLS-1$
+	        if (this.children == null) {
+	        	sb.append("null"); //$NON-NLS-1$
+	        } else {
+	        	for (Node child : this.children) {
+	        		sb.append(child.toString());
+	        	}
+	        }
+	        sb.append("\n}\n"); //$NON-NLS-1$
+	        return sb.toString();
+		}
+		@Override
+		public void traverse(NodeVisitor visitor) {
+			if (visitor.visit(this)) {
+				if (this.children != null) {
+					for (PatternNode child : this.children) {
+						if (!visitor.visit(child)) {
+							break;
+						}
+					}
+				}
+			}
+			visitor.endVisit(this);
+		}
+	}
+	class PatternNode extends Node {
+		TNode next; // next component
+
+		PatternNode(TypeBinding type) {
+			this.type = type;
+		}
+
+		public void addPattern(RecordPattern rp, int i) {
+			TypeBinding ref = SwitchStatement.this.expression.resolvedType;
+			if (!(ref instanceof ReferenceBinding))
+				return;
+			RecordComponentBinding[] comps = ((ReferenceBinding)ref).components();
+			if (comps == null || comps.length <= i) // safety-net for incorrect code.
+				return;
+			if (this.next == null)
+				this.next = new TNode(comps[i].type);
+			this.next.addPattern(rp, i);
+		}
+		@Override
+		public String toString() {
+	        StringBuilder sb = new StringBuilder();
+	        sb.append("[Pattern node] {\n"); //$NON-NLS-1$
+	        sb.append("    type:"); //$NON-NLS-1$
+	        sb.append(this.type != null ? this.type.toString() : "null"); //$NON-NLS-1$
+	        sb.append("    next:"); //$NON-NLS-1$
+	        sb.append(this.next != null ? this.next.toString() : "null"); //$NON-NLS-1$
+	        sb.append("\n}\n"); //$NON-NLS-1$
+	        return sb.toString();
+		}
+		@Override
+		public void traverse(NodeVisitor visitor) {
+			if (visitor.visit(this)) {
+				if (this.next != null) {
+					visitor.visit(this.next);
+				}
+			}
+			visitor.endVisit(this);
+		}
+	}
+	class RecordPatternNode extends PatternNode {
+		RNode rNode;
+		RecordPatternNode(TypeBinding type) {
+			super(type);
+		}
+		@Override
+		public String toString() {
+	        StringBuilder sb = new StringBuilder();
+	        sb.append("[RecordPattern node] {\n"); //$NON-NLS-1$
+	        sb.append("    type:"); //$NON-NLS-1$
+	        sb.append(this.type != null ? this.type.toString() : "null"); //$NON-NLS-1$
+	        sb.append("    next:"); //$NON-NLS-1$
+	        sb.append(this.next != null ? this.next.toString() : "null"); //$NON-NLS-1$
+	        sb.append("    rNode:"); //$NON-NLS-1$
+	        sb.append(this.rNode != null ? this.rNode.toString() : "null"); //$NON-NLS-1$
+	        sb.append("\n}\n"); //$NON-NLS-1$
+	        return sb.toString();
+		}
+		@Override
+		public void traverse(NodeVisitor visitor) {
+			if (visitor.visit(this)) {
+				if (visitor.visit(this.rNode)) {
+					if (this.next != null) {
+						visitor.visit(this.next);
+					}
+				}
+			}
+			visitor.endVisit(this);
+		}
+	}
+
+	abstract class NodeVisitor {
+		public void endVisit(Node node) {
+			// do nothing by default
+		}
+		public void endVisit(PatternNode node) {
+			// do nothing by default
+		}
+		public void endVisit(RecordPatternNode node) {
+			// do nothing by default
+		}
+		public void endVisit(RNode node) {
+			// do nothing by default
+		}
+		public void endVisit(TNode node) {
+			// do nothing by default
+		}
+		public boolean visit(Node node) {
+			return true;
+		}
+		public boolean visit(PatternNode node) {
+			return true;
+		}
+		public boolean visit(RecordPatternNode node) {
+			return true;
+		}
+		public boolean visit(RNode node) {
+			return true;
+		}
+		public boolean visit(TNode node) {
+			return true;
+		}
+	}
+	class CoverageCheckerVisitor extends NodeVisitor {
+		public boolean covers = true;
+		@Override
+		public boolean visit(TNode node) {
+			if (node.hasError)
+				return false;
+
+			List<TypeBinding> availableTypes = new ArrayList<>();
+			if (node.children != null) {
+				for (Node child : node.children) {
+					if (node.type.isSubtypeOf(child.type, false))
+						this.covers = true;
+					child.traverse(this);
+					if (node.type.isSubtypeOf(child.type, false) && this.covers)
+						return false; // no further visit required - covering!
+					availableTypes.add(child.type);
+				}
+			}
+			if (node.type instanceof ReferenceBinding && ((ReferenceBinding)node.type).isSealed()) {
+				List<ReferenceBinding> allAllowedTypes = getAllPermittedTypes((ReferenceBinding) node.type);
+				this.covers &= isExhaustiveWithCaseTypes(allAllowedTypes, availableTypes);
+				return this.covers;
+			}
+			this.covers = false;
+			return false; // no need to visit further.
+		}
+	}
 	protected int getFallThroughState(Statement stmt, BlockScope blockScope) {
-		if (this.switchLabeledRules) {
+		if ((this.switchBits & LabeledRules) != 0) {
 			if ((stmt instanceof Expression && ((Expression) stmt).isTrulyExpression()) || stmt instanceof ThrowStatement)
 				return BREAKING;
 			if (!stmt.canCompleteNormally())
@@ -112,20 +394,20 @@ public class SwitchStatement extends Expression {
 		// do nothing
 	}
 	protected boolean needToCheckFlowInAbsenceOfDefaultBranch() {
-		return true;
+		return !this.isExhaustive();
 	}
 	@Override
 	public FlowInfo analyseCode(BlockScope currentScope, FlowContext flowContext, FlowInfo flowInfo) {
 		try {
 			flowInfo = this.expression.analyseCode(currentScope, flowContext, flowInfo);
-			if ((this.expression.implicitConversion & TypeIds.UNBOXING) != 0
-					|| (this.expression.resolvedType != null
-							&& (this.expression.resolvedType.id == T_JavaLangString || this.expression.resolvedType.isEnum()))) {
+			if (isNullHostile()) {
 				this.expression.checkNPE(currentScope, flowContext, flowInfo, 1);
 			}
 			SwitchFlowContext switchContext =
 				new SwitchFlowContext(flowContext, this, (this.breakLabel = new BranchLabel()), true, true);
 			switchContext.isExpression = this instanceof SwitchExpression;
+
+			CompilerOptions compilerOptions = currentScope.compilerOptions();
 
 			// analyse the block by considering specially the case/default statements (need to bind them
 			// to the entry point)
@@ -137,30 +419,55 @@ public class SwitchStatement extends Expression {
 				int initialComplaintLevel = (flowInfo.reachMode() & FlowInfo.UNREACHABLE) != 0 ? Statement.COMPLAINED_FAKE_REACHABLE : Statement.NOT_COMPLAINED;
 				int complaintLevel = initialComplaintLevel;
 				int fallThroughState = CASE;
+				int prevCaseStmtIndex = -100;
 				for (int i = 0, max = this.statements.length; i < max; i++) {
 					Statement statement = this.statements[i];
 					if ((caseIndex < this.caseCount) && (statement == this.cases[caseIndex])) { // statement is a case
 						this.scope.enclosingCase = this.cases[caseIndex]; // record entering in a switch case block
 						caseIndex++;
-						if (fallThroughState == FALLTHROUGH
-								&& (statement.bits & ASTNode.DocumentedFallthrough) == 0) { // the case is not fall-through protected by a line comment
-							this.scope.problemReporter().possibleFallThroughCase(this.scope.enclosingCase);
+						if (prevCaseStmtIndex == i - 1) {
+							if (((CaseStatement) this.statements[prevCaseStmtIndex]).containsPatternVariable())
+								this.scope.problemReporter().illegalFallthroughFromAPattern(this.statements[prevCaseStmtIndex]);
+						}
+						prevCaseStmtIndex = i;
+						if (fallThroughState == FALLTHROUGH && complaintLevel <= NOT_COMPLAINED) {
+							if (((CaseStatement) statement).containsPatternVariable())
+								this.scope.problemReporter().IllegalFallThroughToPattern(this.scope.enclosingCase);
+							else if ((statement.bits & ASTNode.DocumentedFallthrough) == 0) { // the case is not fall-through protected by a line comment
+								this.scope.problemReporter().possibleFallThroughCase(this.scope.enclosingCase);
+							}
 						}
 						caseInits = caseInits.mergedWith(flowInfo.unconditionalInits());
 						complaintLevel = initialComplaintLevel; // reset complaint
-						fallThroughState = CASE;
+						fallThroughState = this.containsPatterns ? FALLTHROUGH : CASE;
 					} else if (statement == this.defaultCase) { // statement is the default case
 						this.scope.enclosingCase = this.defaultCase; // record entering in a switch case block
 						if (fallThroughState == FALLTHROUGH
+								&& complaintLevel <= NOT_COMPLAINED
 								&& (statement.bits & ASTNode.DocumentedFallthrough) == 0) {
 							this.scope.problemReporter().possibleFallThroughCase(this.scope.enclosingCase);
 						}
 						caseInits = caseInits.mergedWith(flowInfo.unconditionalInits());
+						if ((this.switchBits & LabeledRules) != 0 && this.expression.resolvedType instanceof ReferenceBinding) {
+							if (this.expression instanceof NameReference) {
+								// default case does not apply to null => mark the variable being switched over as nonnull:
+								NameReference reference = (NameReference) this.expression;
+								if (reference.localVariableBinding() != null) {
+									caseInits.markAsDefinitelyNonNull(reference.localVariableBinding());
+								} else if (reference.lastFieldBinding() != null) {
+									if (this.scope.compilerOptions().enableSyntacticNullAnalysisForFields)
+										switchContext.recordNullCheckedFieldReference(reference, 2); // survive this case statement and into the next
+								}
+							} else if (this.expression instanceof FieldReference) {
+								if (this.scope.compilerOptions().enableSyntacticNullAnalysisForFields)
+									switchContext.recordNullCheckedFieldReference((FieldReference) this.expression, 2); // survive this case statement and into the next
+							}
+						}
 						complaintLevel = initialComplaintLevel; // reset complaint
-						fallThroughState = CASE;
+						fallThroughState = this.containsPatterns ? FALLTHROUGH : CASE;
 					} else {
 						if (!(this instanceof SwitchExpression) &&
-							currentScope.compilerOptions().complianceLevel >= ClassFileConstants.JDK14 &&
+							compilerOptions.complianceLevel >= ClassFileConstants.JDK14 &&
 							statement instanceof YieldStatement &&
 							((YieldStatement) statement).isImplicit) {
 							YieldStatement y = (YieldStatement) statement;
@@ -179,7 +486,12 @@ public class SwitchStatement extends Expression {
 						if (caseInits == FlowInfo.DEAD_END) {
 							fallThroughState = ESCAPING;
 						}
-						switchContext.expireNullCheckedFieldInfo();
+						if (compilerOptions.enableSyntacticNullAnalysisForFields) {
+							switchContext.expireNullCheckedFieldInfo();
+						}
+						if (compilerOptions.analyseResourceLeaks) {
+							FakedTrackingVariable.cleanUpUnassigned(this.scope, statement, caseInits, false);
+						}
 					}
 				}
 				completeNormallyCheck(currentScope);
@@ -206,6 +518,19 @@ public class SwitchStatement extends Expression {
 		} finally {
 			if (this.scope != null) this.scope.enclosingCase = null; // no longer inside switch case block
 		}
+	}
+	private boolean isNullHostile() {
+		if (this.containsNull)
+			return false;
+		if ((this.expression.implicitConversion & TypeIds.UNBOXING) != 0) {
+			return true;
+		} else if (this.expression.resolvedType != null
+						&& (this.expression.resolvedType.id == T_JavaLangString || this.expression.resolvedType.isEnum())) {
+			return true;
+		} else if ((this.switchBits & (LabeledRules|NullCase)) == LabeledRules && this.totalPattern == null) {
+			return true;
+		}
+		return false;
 	}
 
 	/**
@@ -280,34 +605,14 @@ public class SwitchStatement extends Expression {
 				And the three string cases and use the this.constMapping to get the correct branch label.
 			 */
 			final boolean hasCases = this.caseCount != 0;
-			int constSize = hasCases ? this.stringConstants.length : 0;
-			BranchLabel[] sourceCaseLabels;
-			if (currentScope.compilerOptions().complianceLevel >= ClassFileConstants.JDK12) {
-				for (int i = 0, max = this.caseCount; i < max; i++) {
-					int l = this.cases[i].constantExpressions.length;
-					this.cases[i].targetLabels = new BranchLabel[l];
-				}
-				sourceCaseLabels = new BranchLabel[this.nConstants];
-				int j = 0;
-				for (int i = 0, max = this.caseCount; i < max; i++) {
-					CaseStatement stmt = this.cases[i];
-					for (int k = 0, l = stmt.constantExpressions.length; k < l; ++k) {
-						stmt.targetLabels[k] = (sourceCaseLabels[j] = new BranchLabel(codeStream));
-						sourceCaseLabels[j++].tagBits |= BranchLabel.USED;
-					}
-				}
-			} else {
-				sourceCaseLabels = new BranchLabel[this.caseCount];
-				for (int i = 0, max = this.caseCount; i < max; i++) {
-					this.cases[i].targetLabel = (sourceCaseLabels[i] = new BranchLabel(codeStream));  // A branch label, not a case label.
-					sourceCaseLabels[i].tagBits |= BranchLabel.USED;
-				}
-			}
+			int constSize = hasCases ? this.otherConstants.length : 0;
+			BranchLabel[] sourceCaseLabels = this.<BranchLabel>gatherLabels(codeStream, new BranchLabel[this.nConstants], BranchLabel::new);
 			StringSwitchCase [] stringCases = new StringSwitchCase[constSize]; // may have to shrink later if multiple strings hash to same code.
 			CaseLabel [] hashCodeCaseLabels = new CaseLabel[constSize];
 			this.constants = new int[constSize];  // hashCode() values.
 			for (int i = 0; i < constSize; i++) {
-				stringCases[i] = new StringSwitchCase(this.stringConstants[i].hashCode(), this.stringConstants[i], sourceCaseLabels[this.constMapping[i]]);
+				String literal = this.otherConstants[i].c.stringValue();
+				stringCases[i] = new StringSwitchCase(literal.hashCode(), literal, sourceCaseLabels[this.constMapping[i]]);
 				hashCodeCaseLabels[i] = new CaseLabel(codeStream);
 				hashCodeCaseLabels[i].tagBits |= BranchLabel.USED;
 			}
@@ -378,6 +683,9 @@ public class SwitchStatement extends Expression {
 						if (this.preSwitchInitStateIndex != -1) {
 							codeStream.removeNotDefinitelyAssignedVariables(currentScope, this.preSwitchInitStateIndex);
 						}
+						if (statement == this.defaultCase) { // statements[i] is a case or a default case
+							defaultCaseLabel.place(); // branch label gets placed by generateCode below.
+						}
 						caseIndex++;
 					} else {
 						if (statement == this.defaultCase) { // statements[i] is a case or a default case
@@ -421,8 +729,26 @@ public class SwitchStatement extends Expression {
 			if (this.scope != null) this.scope.enclosingCase = null; // no longer inside switch case block
 		}
 	}
-
-
+	private <T extends BranchLabel>T[] gatherLabels(CodeStream codeStream, T[] caseLabels,
+			Function<CodeStream, T> newLabel)
+	{
+		for (int i = 0, j = 0, max = this.caseCount; i < max; i++) {
+			CaseStatement stmt = this.cases[i];
+			int l = stmt.constantExpressions.length;
+			BranchLabel[] targetLabels = new BranchLabel[l];
+			int count = 0;
+			for (int k = 0; k < l; ++k) {
+				Expression e = stmt.constantExpressions[k];
+				if (e instanceof FakeDefaultLiteral) continue;
+				targetLabels[count++] = (caseLabels[j] = newLabel.apply(codeStream));
+				if (e == this.totalPattern)
+					this.defaultCase = stmt;
+				caseLabels[j++].tagBits |= BranchLabel.USED;
+			}
+			System.arraycopy(targetLabels, 0, stmt.targetLabels = new BranchLabel[count], 0, count);
+		}
+		return caseLabels;
+	}
 	/**
 	 * Switch code generation
 	 *
@@ -431,7 +757,7 @@ public class SwitchStatement extends Expression {
 	 */
 	@Override
 	public void generateCode(BlockScope currentScope, CodeStream codeStream) {
-		if (this.expression.resolvedType.id == TypeIds.T_JavaLangString) {
+		if (this.expression.resolvedType.id == TypeIds.T_JavaLangString && !this.isNonTraditional) {
 			generateCodeForStringSwitch(currentScope, codeStream);
 			return;
 		}
@@ -443,31 +769,8 @@ public class SwitchStatement extends Expression {
 
 			// prepare the labels and constants
 			this.breakLabel.initialize(codeStream);
-			int constantCount = this.constants == null ? 0 : this.constants.length;
-			int nCaseLabels = 0;
-			CaseLabel[] caseLabels;
-			if (currentScope.compilerOptions().complianceLevel >= ClassFileConstants.JDK12) {
-				for (int i = 0, max = this.caseCount; i < max; i++) {
-					int l = this.cases[i].constantExpressions.length;
-					nCaseLabels += l;
-					this.cases[i].targetLabels = new BranchLabel[l];
-				}
-				caseLabels = new CaseLabel[nCaseLabels];
-				int j = 0;
-				for (int i = 0, max = this.caseCount; i < max; i++) {
-					CaseStatement stmt = this.cases[i];
-					for (int k = 0, l = stmt.constantExpressions.length; k < l; ++k) {
-						stmt.targetLabels[k] = (caseLabels[j] = new CaseLabel(codeStream));
-						caseLabels[j++].tagBits |= BranchLabel.USED;
-					}
-				}
-			} else {
-				caseLabels = new CaseLabel[this.caseCount];
-				for (int i = 0, max = this.caseCount; i < max; i++) {
-					this.cases[i].targetLabel = (caseLabels[i] = new CaseLabel(codeStream));
-					caseLabels[i].tagBits |= BranchLabel.USED;
-				}
-			}
+			int constantCount = this.otherConstants == null ? 0 : this.otherConstants.length;
+			CaseLabel[] caseLabels = this.<CaseLabel>gatherLabels(codeStream, new CaseLabel[this.nConstants], CaseLabel::new);
 
 			CaseLabel defaultLabel = new CaseLabel(codeStream);
 			final boolean hasCases = this.caseCount != 0;
@@ -478,7 +781,11 @@ public class SwitchStatement extends Expression {
 
 			final TypeBinding resolvedType1 = this.expression.resolvedType;
 			boolean valueRequired = false;
-			if (resolvedType1.isEnum()) {
+			if (needPatternDispatchCopy()) {
+				generateCodeSwitchPatternPrologue(currentScope, codeStream);
+				valueRequired = true;
+				transformConstants();
+			} else if (resolvedType1.isEnum()) {
 				// go through the translation table
 				codeStream.invoke(Opcodes.OPC_invokestatic, this.synthetic, null /* default declaringClass */);
 				this.expression.generateCode(currentScope, codeStream, true);
@@ -535,29 +842,56 @@ public class SwitchStatement extends Expression {
 
 			// generate the switch block statements
 			int caseIndex = 0;
+			int typeSwitchIndex = 0;
 			if (this.statements != null) {
 				for (int i = 0, maxCases = this.statements.length; i < maxCases; i++) {
 					Statement statement = this.statements[i];
+					CaseStatement caseStatement = null;
 					if ((caseIndex < constantCount) && (statement == this.cases[caseIndex])) { // statements[i] is a case
 						this.scope.enclosingCase = this.cases[caseIndex]; // record entering in a switch case block
 						if (this.preSwitchInitStateIndex != -1) {
 							codeStream.removeNotDefinitelyAssignedVariables(currentScope, this.preSwitchInitStateIndex);
 						}
+						caseStatement = (CaseStatement) statement;
+						patternCaseExitPreviousCaseScope(codeStream, caseIndex);
 						caseIndex++;
+						typeSwitchIndex += caseStatement.constantExpressions.length;
 					} else {
 						if (statement == this.defaultCase) { // statements[i] is a case or a default case
 							this.scope.enclosingCase = this.defaultCase; // record entering in a switch case block
 							if (this.preSwitchInitStateIndex != -1) {
 								codeStream.removeNotDefinitelyAssignedVariables(currentScope, this.preSwitchInitStateIndex);
 							}
+						} else if (statement instanceof CaseStatement) {
+							caseStatement = (CaseStatement) statement;
+							typeSwitchIndex += caseStatement.constantExpressions.length;
 						}
 					}
 					statementGenerateCode(currentScope, codeStream, statement);
+					generateCodePatternCaseEpilogue(codeStream, typeSwitchIndex, caseStatement);
 				}
 			}
-			boolean enumInSwitchExpression =  resolvedType1.isEnum() && this instanceof SwitchExpression;
-			boolean isEnumSwitchWithoutDefaultCase = this.defaultCase == null && enumInSwitchExpression;
-			if (isEnumSwitchWithoutDefaultCase) {
+
+			boolean isEnumSwitchWithoutDefaultCase = this.defaultCase == null && resolvedType1.isEnum() && (this instanceof SwitchExpression || this.containsNull);
+			CompilerOptions compilerOptions = this.scope != null ? this.scope.compilerOptions() : null;
+			boolean isPatternSwitchSealedWithoutDefaultCase = this.defaultCase == null
+							&& compilerOptions != null
+							&& this.containsPatterns
+							&& JavaFeature.SEALED_CLASSES.isSupported(compilerOptions)
+							&& JavaFeature.PATTERN_MATCHING_IN_SWITCH.isSupported(compilerOptions)
+							&& this.expression.resolvedType instanceof ReferenceBinding
+							&& ((ReferenceBinding) this.expression.resolvedType).isSealed();
+
+			boolean isRecordPatternSwitchWithoutDefault = this.defaultCase == null
+					&& compilerOptions != null
+					&& this.containsPatterns
+					&& JavaFeature.RECORD_PATTERNS.isSupported(compilerOptions)
+					&& JavaFeature.PATTERN_MATCHING_IN_SWITCH.isSupported(compilerOptions)
+					&& this.expression.resolvedType instanceof ReferenceBinding
+					&& this.expression.resolvedType.isRecord();
+			if (isEnumSwitchWithoutDefaultCase
+					|| isPatternSwitchSealedWithoutDefaultCase
+					|| isRecordPatternSwitchWithoutDefault) {
 				// we want to force an line number entry to get an end position after the switch statement
 				if (this.preSwitchInitStateIndex != -1) {
 					codeStream.removeNotDefinitelyAssignedVariables(currentScope, this.preSwitchInitStateIndex);
@@ -571,22 +905,34 @@ public class SwitchStatement extends Expression {
 				 * IllegalClassChangeError seems legitimate as this would mean the enum type has been recompiled with more
 				 * enum constants and the class that is using the switch on the enum has not been recompiled
 				 */
-				codeStream.newJavaLangIncompatibleClassChangeError();
-				codeStream.dup();
-				codeStream.invokeJavaLangIncompatibleClassChangeErrorDefaultConstructor();
-				codeStream.athrow();
+				if (compilerOptions.complianceLevel >= ClassFileConstants.JDK19) {
+					codeStream.newJavaLangMatchException();
+					codeStream.dup();
+					codeStream.aconst_null();
+					codeStream.aconst_null();
+					codeStream.invokeJavaLangMatchExceptionConstructor();
+					codeStream.athrow();
+				} else {
+					codeStream.newJavaLangIncompatibleClassChangeError();
+					codeStream.dup();
+					codeStream.invokeJavaLangIncompatibleClassChangeErrorDefaultConstructor();
+					codeStream.athrow();
+				}
 			}
 			// May loose some local variable initializations : affecting the local variable attributes
 			if (this.mergedInitStateIndex != -1) {
 				codeStream.removeNotDefinitelyAssignedVariables(currentScope, this.mergedInitStateIndex);
 				codeStream.addDefinitelyAssignedVariables(currentScope, this.mergedInitStateIndex);
 			}
+			generateCodeSwitchPatternEpilogue(codeStream);
 			if (this.scope != currentScope) {
 				codeStream.exitUserScope(this.scope);
 			}
 			// place the trailing labels (for break and default case)
 			this.breakLabel.place();
-			if (this.defaultCase == null && !enumInSwitchExpression) {
+			if (this.defaultCase == null && !(isEnumSwitchWithoutDefaultCase
+					|| isPatternSwitchSealedWithoutDefaultCase
+					|| isRecordPatternSwitchWithoutDefault)) {
 				// we want to force an line number entry to get an end position after the switch statement
 				codeStream.recordPositionsFrom(codeStream.position, this.sourceEnd, true);
 				defaultLabel.place();
@@ -599,12 +945,118 @@ public class SwitchStatement extends Expression {
 				boolean optimizedGoto = codeStream.lastAbruptCompletion == -1;
 				// if the last bytecode was an optimized goto (value is already on the stack) or an enum switch without default case, then we need to adjust the
 				// stack depth to reflect the fact that there is an value on the stack (return type of the switch expression)
-				codeStream.recordExpressionType(switchResolveType, optimizedGoto ? 0 : 1, optimizedGoto || isEnumSwitchWithoutDefaultCase);
+				codeStream.recordExpressionType(switchResolveType, optimizedGoto ? 0 : 1, optimizedGoto || (isEnumSwitchWithoutDefaultCase && this instanceof SwitchExpression));
 			}
 			codeStream.recordPositionsFrom(pc, this.sourceStart);
 		} finally {
 			if (this.scope != null) this.scope.enclosingCase = null; // no longer inside switch case block
 		}
+	}
+	private void transformConstants() {
+		if (this.nullCase == null) {
+			for (int i = 0,l = this.otherConstants.length; i < l; ++i) {
+				if (this.otherConstants[i].e == this.totalPattern) {
+					this.otherConstants[i].index = -1;
+					break;
+				}
+			}
+		}
+		for (int i = 0; i < this.constants.length; i++) {
+			this.constants[i] = this.otherConstants[i].index;
+		}
+	}
+	private void generateCodeSwitchPatternEpilogue(CodeStream codeStream) {
+		if (needPatternDispatchCopy()) {
+			codeStream.removeVariable(this.dispatchPatternCopy);
+			codeStream.removeVariable(this.restartIndexLocal);
+		}
+	}
+	private void patternCaseExitPreviousCaseScope(CodeStream codeStream, int caseIndex) {
+		if (caseIndex > 0) {
+			CaseStatement caseStatement = this.cases[caseIndex];
+			if (caseStatement.containsPatternVariable()) {
+				caseStatement.patternCaseRemovePatternLocals(codeStream);
+			}
+		}
+	}
+	private void generateCodePatternCaseEpilogue(CodeStream codeStream, int caseIndex, CaseStatement caseStatement) {
+		if (this.switchPatternRestartTarget != null && caseStatement != null
+				&& caseStatement.patternIndex != -1 // for null
+				) {
+			Pattern pattern = (Pattern) caseStatement.constantExpressions[caseStatement.patternIndex];
+			pattern.elseTarget.place();
+			pattern.suspendVariables(codeStream, this.scope);
+			caseIndex = this.nullProcessed ? caseIndex - 1 : caseIndex;
+			if (!pattern.isAlwaysTrue()) {
+				codeStream.loadInt(caseIndex);
+				codeStream.store(this.restartIndexLocal, false);
+				codeStream.goto_(this.switchPatternRestartTarget);
+			}
+			pattern.thenTarget.place();
+			pattern.resumeVariables(codeStream, this.scope);
+		} else if (this.containsNull && caseStatement != null) {
+			this.nullProcessed |= caseStatement.patternIndex == -1;
+		}
+	}
+	private void generateCodeSwitchPatternPrologue(BlockScope currentScope, CodeStream codeStream) {
+		this.expression.generateCode(currentScope, codeStream, true);
+		if ((this.switchBits & NullCase) == 0) {
+			codeStream.dup();
+			codeStream.invokeJavaUtilObjectsrequireNonNull();
+			codeStream.pop();
+		}
+
+		codeStream.store(this.dispatchPatternCopy, false);
+		codeStream.addVariable(this.dispatchPatternCopy);
+
+		codeStream.loadInt(0); // restartIndex
+		codeStream.store(this.restartIndexLocal, false);
+		codeStream.addVariable(this.restartIndexLocal);
+
+		this.switchPatternRestartTarget = new BranchLabel(codeStream);
+		this.switchPatternRestartTarget.place();
+
+		codeStream.load(this.dispatchPatternCopy);
+		codeStream.load(this.restartIndexLocal);
+		int invokeDynamicNumber = codeStream.classFile.recordBootstrapMethod(this);
+		if (this.expression.resolvedType.isEnum()) {
+			generateEnumSwitchPatternPrologue(codeStream, invokeDynamicNumber);
+		} else {
+			generateTypeSwitchPatternPrologue(codeStream, invokeDynamicNumber);
+		}
+		boolean hasQualifiedEnums = (this.switchBits & QualifiedEnum) != 0;
+		for (int i = 0; i < this.otherConstants.length; i++) {
+			ResolvedCase c = this.otherConstants[i];
+			if (hasQualifiedEnums) {
+				c.index = i;
+			}
+			if (!c.isQualifiedEnum())
+				continue;
+			int classdescIdx = codeStream.classFile.recordBootstrapMethod(c.t);
+			invokeDynamicNumber = codeStream.classFile.recordBootstrapMethod(c);
+			c.enumDescIdx = invokeDynamicNumber;
+			c.classDescIdx = classdescIdx;
+		}
+	}
+	private void generateTypeSwitchPatternPrologue(CodeStream codeStream, int invokeDynamicNumber) {
+		codeStream.invokeDynamic(invokeDynamicNumber,
+				2, // Object, restartIndex
+				1, // int
+				ConstantPool.TYPESWITCH,
+				"(Ljava/lang/Object;I)I".toCharArray(), //$NON-NLS-1$
+				TypeIds.T_int,
+				TypeBinding.INT);
+	}
+	private void generateEnumSwitchPatternPrologue(CodeStream codeStream, int invokeDynamicNumber) {
+		String genericTypeSignature = new String(this.expression.resolvedType.genericTypeSignature());
+		String callingParams = "(" + genericTypeSignature + "I)I"; //$NON-NLS-1$ //$NON-NLS-2$
+		codeStream.invokeDynamic(invokeDynamicNumber,
+				2, // Object, restartIndex
+				1, // int
+				"enumSwitch".toCharArray(), //$NON-NLS-1$
+				callingParams.toCharArray(),
+				TypeIds.T_int,
+				TypeBinding.INT);
 	}
 	protected void statementGenerateCode(BlockScope currentScope, CodeStream codeStream, Statement statement) {
 		statement.generateCode(this.scope, codeStream);
@@ -615,7 +1067,7 @@ public class SwitchStatement extends Expression {
 		generateCode(currentScope, codeStream); // redirecting to statement part
 	}
 	@Override
-	public StringBuffer printStatement(int indent, StringBuffer output) {
+	public StringBuilder printStatement(int indent, StringBuilder output) {
 
 		printIndent(indent, output).append("switch ("); //$NON-NLS-1$
 		this.expression.printExpression(0, output).append(") {"); //$NON-NLS-1$
@@ -637,17 +1089,39 @@ public class SwitchStatement extends Expression {
 		int n = 0;
 		for (int i = 0, l = this.statements.length; i < l; ++i) {
 			final Statement statement = this.statements[i];
-			if (!(statement instanceof CaseStatement))  {
-				continue;
+			if (statement instanceof CaseStatement)  {
+				Expression[] exprs = ((CaseStatement) statement).constantExpressions;
+				int count = 0;
+				if (exprs != null) {
+					for (Expression e : exprs) {
+						if (e instanceof FakeDefaultLiteral) continue;
+						++count;
+					}
+				}
+				n += count;
 			}
-			CaseStatement caseStmt = (CaseStatement) statement;
-			n += caseStmt.constantExpressions != null ? caseStmt.constantExpressions.length :
-				caseStmt.constantExpression != null ? 1 : 0;
 		}
 		return n;
 	}
 	protected void addSecretTryResultVariable() {
 		// do nothing
+	}
+	/* package */ boolean isAllowedType(TypeBinding type) {
+		if (type == null)
+			return false;
+		switch (type.id) {
+			case TypeIds.T_char:
+			case TypeIds.T_byte:
+			case TypeIds.T_short:
+			case TypeIds.T_int:
+			case TypeIds.T_JavaLangCharacter :
+			case TypeIds.T_JavaLangByte :
+			case TypeIds.T_JavaLangShort :
+			case TypeIds.T_JavaLangInteger :
+				return true;
+			default: break;
+		}
+		return false;
 	}
 	@Override
 	public void resolve(BlockScope upperScope) {
@@ -656,6 +1130,7 @@ public class SwitchStatement extends Expression {
 			boolean isStringSwitch = false;
 			TypeBinding expressionType = this.expression.resolveType(upperScope);
 			CompilerOptions compilerOptions = upperScope.compilerOptions();
+			boolean isEnhanced = checkAndSetEnhanced(upperScope, expressionType);
 			if (expressionType != null) {
 				this.expression.computeConversion(upperScope, expressionType, expressionType);
 				checkType: {
@@ -673,18 +1148,27 @@ public class SwitchStatement extends Expression {
 							upperScope.problemReporter().incorrectSwitchType(this.expression, expressionType); // https://bugs.eclipse.org/bugs/show_bug.cgi?id=360317
 						}
 						break checkType;
-					} else if (upperScope.isBoxingCompatibleWith(expressionType, TypeBinding.INT)) {
+					} else if (!this.containsPatterns && !this.containsNull && upperScope.isBoxingCompatibleWith(expressionType, TypeBinding.INT)) {
 						this.expression.computeConversion(upperScope, TypeBinding.INT, expressionType);
 						break checkType;
 					} else if (compilerOptions.complianceLevel >= ClassFileConstants.JDK1_7 && expressionType.id == TypeIds.T_JavaLangString) {
+						if (this.containsPatterns || this.containsNull) {
+							isStringSwitch = !JavaFeature.PATTERN_MATCHING_IN_SWITCH.isSupported(compilerOptions);
+							this.isNonTraditional = true;
+							break checkType;
+						}
 						isStringSwitch = true;
 						break checkType;
 					}
-					upperScope.problemReporter().incorrectSwitchType(this.expression, expressionType);
-					expressionType = null; // fault-tolerance: ignore type mismatch from constants from hereon
+					if (!JavaFeature.PATTERN_MATCHING_IN_SWITCH.isSupported(compilerOptions)) {
+						upperScope.problemReporter().incorrectSwitchType(this.expression, expressionType);
+						expressionType = null; // fault-tolerance: ignore type mismatch from constants from hereon
+					} else {
+						this.isNonTraditional = true;
+					}
 				}
 			}
-			if (isStringSwitch) {
+ 			if (isStringSwitch) {
 				// the secret variable should be created before iterating over the switch's statements that could
 				// create more locals. This must be done to prevent overlapping of locals
 				// See https://bugs.eclipse.org/bugs/show_bug.cgi?id=356002
@@ -693,66 +1177,110 @@ public class SwitchStatement extends Expression {
 				this.dispatchStringCopy.setConstant(Constant.NotAConstant);
 				this.dispatchStringCopy.useFlag = LocalVariableBinding.USED;
 			}
+			addSecretPatternSwitchVariables(upperScope);
 			if (this.statements != null) {
-				this.scope = new BlockScope(upperScope);
-//				addSecretTryResultVariable();
+				if (this.scope == null)
+					this.scope = new BlockScope(upperScope);
 				int length;
 				// collection of cases is too big but we will only iterate until caseCount
 				this.cases = new CaseStatement[length = this.statements.length];
 				this.nConstants = getNConstants();
-				if (!isStringSwitch) {
-					this.constants = new int[this.nConstants];
-					this.constMapping = new int[this.nConstants];
-				} else {
-					this.stringConstants = new String[this.nConstants];
-					this.constMapping = new int[this.nConstants];
-				}
+				this.constants = new int[this.nConstants];
+				this.otherConstants = new ResolvedCase[this.nConstants];
+				this.constMapping = new int[this.nConstants];
 				int counter = 0;
 				int caseCounter = 0;
+				Pattern[] patterns = new Pattern[this.nConstants];
+				int[] caseIndex = new int[this.nConstants];
+				LocalVariableBinding[] patternVariables = NO_VARIABLES;
+				boolean caseNullDefaultFound = false;
+				boolean defaultFound = false;
 				for (int i = 0; i < length; i++) {
-					Constant[] constantsList;
-					int[] caseIndex = new int[this.nConstants];
+					ResolvedCase[] constantsList;
 					final Statement statement = this.statements[i];
-					if (!(statement instanceof CaseStatement))  {
-						statement.resolve(this.scope);
-						continue;
-					}
-					if ((constantsList = statement.resolveCase(this.scope, expressionType, this)) != Constant.NotAConstantList) {
-						for (Constant con : constantsList) {
-							if (con == Constant.NotAConstant)
-								continue;
-							if (!isStringSwitch) {
-								int key = con.intValue();
-								//----check for duplicate case statement------------
+					if (statement instanceof CaseStatement caseStmt) {
+						caseNullDefaultFound = caseNullDefaultFound ? caseNullDefaultFound
+								: isCaseStmtNullDefault(caseStmt);
+						defaultFound |= caseStmt.constantExpressions == null;
+						constantsList = caseStmt.resolveCase(this.scope, expressionType, this);
+						patternVariables = statement.bindingsWhenTrue();
+						if (constantsList != ResolvedCase.UnresolvedCase) {
+							for (ResolvedCase c : constantsList) {
+								Constant con = c.c;
+								if (con == Constant.NotAConstant)
+									continue;
+								this.otherConstants[counter] = c;
+							    final int c1 = this.containsPatterns ? (c.intValue() == -1 ? -1 : counter) : c.intValue();
+								this.constants[counter] = c1;
+								if (counter == 0 && defaultFound) {
+									if (c.isPattern() || isCaseStmtNullOnly(caseStmt))
+										this.scope.problemReporter().patternDominatedByAnother(c.e);
+								}
 								for (int j = 0; j < counter; j++) {
-									if (this.constants[j] == key) {
-										reportDuplicateCase((CaseStatement) statement, this.cases[caseIndex[j]], length);
+									IntPredicate check = idx -> {
+										Constant c2 = this.otherConstants[idx].c;
+										if (con.typeID() == TypeIds.T_JavaLangString) {
+											return c2.stringValue().equals(con.stringValue());
+										} else {
+											if (c2.typeID() == TypeIds.T_JavaLangString)
+												return false;
+											if (con.intValue() == c2.intValue())
+												return true;
+											return this.constants[idx] == c1;
+										}
+									};
+									TypeBinding type = c.e.resolvedType;
+									if (!type.isValidBinding())
+										continue;
+									if ((caseNullDefaultFound || defaultFound) && (c.isPattern() || isCaseStmtNullOnly(caseStmt))) {
+										this.scope.problemReporter().patternDominatedByAnother(c.e);
+										break;
+									}
+									Pattern p1 = patterns[j];
+									if (p1 != null) {
+										if (c.isPattern()) {
+											if (p1.dominates((Pattern) c.e)) {
+												this.scope.problemReporter().patternDominatedByAnother(c.e);
+											}
+										} else {
+											if (type.id != TypeIds.T_null) {
+												if (type.isBaseType()) {
+													type = this.scope.environment().computeBoxingType(type);
+												}
+												if (p1.coversType(type))
+													this.scope.problemReporter().patternDominatedByAnother(c.e);
+											}
+										}
+									} else {
+										if (!c.isPattern() && check.test(j)) {
+											if (this.isNonTraditional) {
+											if (c.e instanceof NullLiteral && this.otherConstants[j].e instanceof NullLiteral) {
+													reportDuplicateCase(c.e, this.otherConstants[j].e, length);
+												}
+											} else {
+												reportDuplicateCase(caseStmt, this.cases[caseIndex[j]], length);
+											}
+										}
 									}
 								}
-								this.constants[counter] = key;
-							} else {
-								String key = con.stringValue();
-								//----check for duplicate case statement------------
-								for (int j = 0; j < counter; j++) {
-									if (this.stringConstants[j].equals(key)) {
-										reportDuplicateCase((CaseStatement) statement, this.cases[caseIndex[j]], length);
-									}
+								this.constMapping[counter] = counter;
+								caseIndex[counter] = caseCounter;
+								// Only the pattern expressions count for dominance check
+								if (c.e instanceof Pattern) {
+									patterns[counter] = (Pattern) c.e;
 								}
-								this.stringConstants[counter] = key;
+								counter++;
 							}
-							this.constMapping[counter] = counter;
-							caseIndex[counter] = caseCounter;
-							counter++;
 						}
+						caseCounter++;
+					} else {
+						statement.resolveWithBindings(patternVariables, this.scope);
+						patternVariables = LocalVariableBinding.merge(patternVariables, statement.bindingsWhenComplete());
 					}
-					caseCounter++;
 				}
 				if (length != counter) { // resize constants array
-					if (!isStringSwitch) {
-						System.arraycopy(this.constants, 0, this.constants = new int[counter], 0, counter);
-					} else {
-						System.arraycopy(this.stringConstants, 0, this.stringConstants = new String[counter], 0, counter);
-					}
+					System.arraycopy(this.otherConstants, 0, this.otherConstants = new ResolvedCase[counter], 0, counter);
+					System.arraycopy(this.constants, 0, this.constants = new int[counter], 0, counter);
 					System.arraycopy(this.constMapping, 0, this.constMapping = new int[counter], 0, counter);
 				}
 			} else {
@@ -760,32 +1288,47 @@ public class SwitchStatement extends Expression {
 					upperScope.problemReporter().undocumentedEmptyBlock(this.blockStart, this.sourceEnd);
 				}
 			}
+			// Try it again in case we found any qualified enums.
+			if (this.dispatchPatternCopy == null) {
+				addSecretPatternSwitchVariables(upperScope);
+			}
 			reportMixingCaseTypes();
+
 			// check default case for all kinds of switch:
-			if (this.defaultCase == null) {
-				if (ignoreMissingDefaultCase(compilerOptions, isEnumSwitch)) {
-					if (isEnumSwitch) {
+			boolean flagged = checkAndFlagDefaultSealed(upperScope, compilerOptions);
+			if (!flagged && this.defaultCase == null) {
+				if (ignoreMissingDefaultCase(compilerOptions, isEnumSwitch) && isEnumSwitch) {
 						upperScope.methodScope().hasMissingSwitchDefault = true;
-					}
 				} else {
-					upperScope.problemReporter().missingDefaultCase(this, isEnumSwitch, expressionType);
+					if (!isExhaustive()) {
+						if (isEnhanced)
+							upperScope.problemReporter().enhancedSwitchMissingDefaultCase(this.expression);
+						else
+							upperScope.problemReporter().missingDefaultCase(this, isEnumSwitch, expressionType);
+					}
 				}
 			}
 			// for enum switch, check if all constants are accounted for (perhaps depending on existence of a default case)
 			if (isEnumSwitch && compilerOptions.complianceLevel >= ClassFileConstants.JDK1_5) {
 				if (this.defaultCase == null || compilerOptions.reportMissingEnumCaseDespiteDefault) {
-					int constantCount = this.constants == null ? 0 : this.constants.length; // could be null if no case statement
-					if (constantCount >= this.caseCount
-							&& constantCount != ((ReferenceBinding)expressionType).enumConstantCount()) {
+					int constantCount = this.otherConstants == null ? 0 : this.otherConstants.length; // could be null if no case statement
+					// The previous computation of exhaustiveness by comparing the size of cases to the enum fields
+					// no longer holds true when we throw in a pattern expression to the mix.
+					// And if there is a total pattern, then we don't have to check further.
+					if (!((this.switchBits & TotalPattern) != 0) &&
+							(this.containsPatterns ||
+							(constantCount >= this.caseCount &&
+							constantCount != ((ReferenceBinding)expressionType).enumConstantCount()))) {
 						FieldBinding[] enumFields = ((ReferenceBinding)expressionType.erasure()).fields();
 						for (int i = 0, max = enumFields.length; i <max; i++) {
 							FieldBinding enumConstant = enumFields[i];
 							if ((enumConstant.modifiers & ClassFileConstants.AccEnum) == 0) continue;
 							findConstant : {
 								for (int j = 0; j < constantCount; j++) {
-									if ((enumConstant.id + 1) == this.constants[j]) // zero should not be returned see bug 141810
+									if ((enumConstant.id + 1) == this.otherConstants[j].c.intValue()) // zero should not be returned see bug 141810
 										break findConstant;
 								}
+								this.switchBits &= ~(1 << SwitchStatement.Exhaustive);
 								// enum constant did not get referenced from switch
 								boolean suppress = (this.defaultCase != null && (this.defaultCase.bits & DocumentedCasesOmitted) != 0);
 								if (!suppress) {
@@ -800,6 +1343,231 @@ public class SwitchStatement extends Expression {
 			if (this.scope != null) this.scope.enclosingCase = null; // no longer inside switch case block
 		}
 	}
+	private boolean isCaseStmtNullDefault(CaseStatement caseStmt) {
+		return caseStmt != null
+				&& caseStmt.constantExpressions != null
+				&& caseStmt.constantExpressions.length == 2
+				&& caseStmt.constantExpressions[0] instanceof NullLiteral
+				&& caseStmt.constantExpressions[1] instanceof FakeDefaultLiteral;
+	}
+	private boolean isCaseStmtNullOnly(CaseStatement caseStmt) {
+		return caseStmt != null
+				&& caseStmt.constantExpressions != null
+				&& caseStmt.constantExpressions.length == 1
+				&& caseStmt.constantExpressions[0] instanceof NullLiteral;
+	}
+	private boolean isExhaustive() {
+		return (this.switchBits & SwitchStatement.Exhaustive) != 0;
+	}
+	public boolean isEnhanced() {
+		return (this.switchBits & SwitchStatement.Enhanced) != 0;
+	}
+	private boolean checkAndSetEnhanced(BlockScope upperScope, TypeBinding expressionType) {
+		if (JavaFeature.PATTERN_MATCHING_IN_SWITCH.isSupported(upperScope.compilerOptions())
+				&& expressionType != null && !(this instanceof SwitchExpression )) {
+
+			boolean acceptableType = !expressionType.isEnum();
+			switch (expressionType.id) {
+				case TypeIds.T_char:
+				case TypeIds.T_byte:
+				case TypeIds.T_short:
+				case TypeIds.T_int:
+				case TypeIds.T_JavaLangCharacter:
+				case TypeIds.T_JavaLangByte:
+				case TypeIds.T_JavaLangShort:
+				case TypeIds.T_JavaLangInteger:
+				case TypeIds.T_JavaLangString:
+					acceptableType = false;
+			}
+			if (acceptableType || this.containsPatterns || this.containsNull) {
+				this.switchBits |= SwitchStatement.Enhanced;
+				return true;
+			}
+		}
+		return false;
+	}
+	private boolean checkAndFlagDefaultSealed(BlockScope skope, CompilerOptions compilerOptions) {
+		if (this.defaultCase != null) { // mark covered as a side effect (since covers is intro in 406)
+			this.switchBits |= SwitchStatement.Exhaustive;
+			return false;
+		}
+		boolean checkSealed = this.containsPatterns
+				&& JavaFeature.SEALED_CLASSES.isSupported(compilerOptions)
+				&& JavaFeature.PATTERN_MATCHING_IN_SWITCH.isSupported(compilerOptions)
+				&& this.expression.resolvedType instanceof ReferenceBinding;
+		if (!checkSealed) return false;
+		ReferenceBinding ref = (ReferenceBinding) this.expression.resolvedType;
+		if (!(ref.isClass() || ref.isInterface() || ref.isTypeVariable() || ref.isIntersectionType()))
+			return false;
+		if (ref instanceof TypeVariableBinding) {
+			TypeVariableBinding tvb = (TypeVariableBinding) ref;
+			ref = tvb.firstBound instanceof ReferenceBinding ? (ReferenceBinding) tvb.firstBound : ref;
+		}
+		if (ref.isRecord()) {
+			boolean isRecordPattern = false;
+			for (int i = 0; i < this.caseLabelElements.size(); ++i) {
+				if (this.caseLabelElements.get(i) instanceof RecordPattern) {
+					isRecordPattern = true;
+					break;
+				}
+			}
+			if (isRecordPattern)
+				return checkAndFlagDefaultRecord(skope, compilerOptions, ref);
+		}
+		if (!ref.isSealed()) return false;
+		if (!isExhaustiveWithCaseTypes(getAllPermittedTypes(ref), this.caseLabelElementTypes)) {
+			if (this instanceof SwitchExpression) // non-exhaustive switch expressions will be flagged later.
+				return false;
+			skope.problemReporter().enhancedSwitchMissingDefaultCase(this.expression);
+			return true;
+		}
+		this.switchBits |= SwitchStatement.Exhaustive;
+		return false;
+	}
+	List<ReferenceBinding> getAllPermittedTypes(ReferenceBinding ref) {
+		if (!ref.isSealed())
+			return new ArrayList<>(0);
+
+		Set<ReferenceBinding> permSet = new HashSet<>(Arrays.asList(ref.permittedTypes()));
+		if (ref.isClass() && (!ref.isAbstract()))
+			permSet.add(ref);
+		Set<ReferenceBinding> oldSet = new HashSet<>(permSet);
+		do {
+			for (ReferenceBinding type : permSet) {
+				oldSet.addAll(Arrays.asList(type.permittedTypes()));
+			}
+			Set<ReferenceBinding> tmp = oldSet;
+			oldSet = permSet;
+			permSet = tmp;
+		} while (oldSet.size() != permSet.size());
+		return Arrays.asList(permSet.toArray(new ReferenceBinding[0]));
+	}
+
+	private boolean checkAndFlagDefaultRecord(BlockScope skope, CompilerOptions compilerOptions, ReferenceBinding ref) {
+		RecordComponentBinding[] comps = ref.components();
+		List<ReferenceBinding> allallowedTypes = new ArrayList<>();
+		allallowedTypes.add(ref);
+		if (comps == null || comps.length == 0) {
+			if (!isExhaustiveWithCaseTypes(allallowedTypes, this.caseLabelElementTypes)) {
+				skope.problemReporter().enhancedSwitchMissingDefaultCase(this.expression);
+				return true;
+			}
+			return false;
+		}
+		// non-zero components
+		RNode head = new RNode(ref);
+		for (int i = 0; i < this.caseLabelElements.size(); ++i) {
+			head.addPattern(this.caseLabelElements.get(i));
+		}
+		CoverageCheckerVisitor ccv = new CoverageCheckerVisitor();
+		head.traverse(ccv);
+		if (!ccv.covers) {
+			skope.problemReporter().enhancedSwitchMissingDefaultCase(this.expression);
+			return true; // not exhaustive, error flagged
+		}
+		this.switchBits |= SwitchStatement.Exhaustive;
+		return false;
+	}
+	private boolean isExhaustiveWithCaseTypes(List<ReferenceBinding> allAllowedTypes,  List<TypeBinding> listedTypes) {
+		// first KISS (Keep It Simple Stupid)
+		int pendingTypes = allAllowedTypes.size();
+		for (ReferenceBinding pt : allAllowedTypes) {
+			/* Per JLS 14.11.1.1: A type T that names an abstract sealed class or sealed interface is covered
+			   if every permitted direct subclass or subinterface of it is covered. These subtypes are already
+			   added to allAllowedTypes and subject to cover test.
+			*/
+			if (pt.isAbstract() && pt.isSealed()) {
+				--pendingTypes;
+				continue;
+			}
+			for (TypeBinding type : listedTypes) {
+				if (pt.isCompatibleWith(type)) {
+					--pendingTypes;
+					break;
+				}
+			}
+		}
+		if (pendingTypes == 0)
+			return true;
+		// else - #KICKME (Keep It Complicated Keep Me Employed)"
+		List<TypeBinding> coveredTypes = new ArrayList<>(listedTypes);
+		List<ReferenceBinding> remainingTypes = new ArrayList<>(allAllowedTypes);
+		remainingTypes.removeAll(coveredTypes);
+
+		Map<TypeBinding, List<TypeBinding>> impliedTypes = new HashMap<>();
+
+		for (ReferenceBinding type : remainingTypes) {
+			impliedTypes.put(type, new ArrayList<>());
+			List<ReferenceBinding> typesToAdd = new ArrayList<>();
+			for (ReferenceBinding impliedType : allAllowedTypes) {
+				if (impliedType.equals(type)) continue;
+				if (type.isClass()) {
+					if (impliedType.isAbstract() && type.superclass().equals(impliedType)) {
+						typesToAdd.add(impliedType);
+					}
+					if (Arrays.asList(type.superInterfaces()).contains(impliedType))
+						typesToAdd.add(impliedType);
+				} else if (type.isInterface()) {
+					if (Arrays.asList(impliedType.superInterfaces()).contains(type))
+						typesToAdd.add(impliedType);
+				}
+			}
+			if (!typesToAdd.isEmpty()) {
+				impliedTypes.get(type).addAll(typesToAdd);
+			}
+		}
+		boolean delta = true;
+		while (delta) {
+			delta = false;
+			List<ReferenceBinding> typesToAdd = new ArrayList<>();
+			for (ReferenceBinding type : remainingTypes) {
+				boolean add = false;
+				if (type.isClass()) {
+					for (TypeBinding tb : impliedTypes.get(type)) {
+						if (coveredTypes.contains(tb)) {
+							add = true;
+							break;
+						}
+					}
+				} else if (type.isInterface()) {
+					add = coveredTypes.containsAll(impliedTypes.get(type));
+				}
+				if (add) {
+					typesToAdd.add(type);
+				}
+			}
+			if (!typesToAdd.isEmpty()) {
+				remainingTypes.removeAll(typesToAdd);
+				coveredTypes.addAll(typesToAdd);
+				typesToAdd.clear();
+				delta = true;
+			}
+		}
+		return remainingTypes.isEmpty();
+	}
+	private boolean needPatternDispatchCopy() {
+		if (this.containsPatterns || (this.switchBits & QualifiedEnum) != 0)
+			return true;
+		if (this.containsNull)
+			return true;
+		TypeBinding eType = this.expression != null ? this.expression.resolvedType : null;
+		if (eType == null)
+			return false;
+		return !(eType.isPrimitiveOrBoxedPrimitiveType() || eType.isEnum() || eType.id == TypeIds.T_JavaLangString); // classic selectors
+	}
+	private void addSecretPatternSwitchVariables(BlockScope upperScope) {
+		if (needPatternDispatchCopy()) {
+			this.scope = new BlockScope(upperScope);
+			this.dispatchPatternCopy  = new LocalVariableBinding(SecretPatternVariableName, this.expression.resolvedType, ClassFileConstants.AccDefault, false);
+			this.scope.addLocalVariable(this.dispatchPatternCopy);
+			this.dispatchPatternCopy.setConstant(Constant.NotAConstant);
+			this.dispatchPatternCopy.useFlag = LocalVariableBinding.USED;
+			this.restartIndexLocal  = new LocalVariableBinding(SecretPatternRestartIndexName, TypeBinding.INT, ClassFileConstants.AccDefault, false);
+			this.scope.addLocalVariable(this.restartIndexLocal);
+			this.restartIndexLocal.setConstant(Constant.NotAConstant);
+			this.restartIndexLocal.useFlag = LocalVariableBinding.USED;
+		}
+	}
 	protected void reportMissingEnumConstantCase(BlockScope upperScope, FieldBinding enumConstant) {
 		upperScope.problemReporter().missingEnumConstantCase(this, enumConstant);
 	}
@@ -812,10 +1580,14 @@ public class SwitchStatement extends Expression {
 	}
 	private void reportMixingCaseTypes() {
 		if (this.caseCount == 0) {
-			this.switchLabeledRules = this.defaultCase != null ? this.defaultCase.isExpr : this.switchLabeledRules;
+			if (this.defaultCase != null && this.defaultCase.isExpr)
+				this.switchBits |= LabeledRules;
 			return;
 		}
-		boolean isExpr = this.switchLabeledRules = this.cases[0].isExpr;
+		if (this.cases[0] == null)
+			return;
+		boolean isExpr = this.cases[0].isExpr;
+		if (isExpr) this.switchBits |= LabeledRules;
 		for (int i = 1, l = this.caseCount; i < l; ++i) {
 			if (this.cases[i].isExpr != isExpr) {
 				this.scope.problemReporter().switchExpressionMixedCase(this.cases[i]);
@@ -826,26 +1598,28 @@ public class SwitchStatement extends Expression {
 			this.scope.problemReporter().switchExpressionMixedCase(this.defaultCase);
 		}
 	}
-	private void reportDuplicateCase(final CaseStatement duplicate, final CaseStatement original, int length) {
-		if (this.duplicateCaseStatements == null) {
+	private void reportDuplicateCase(final Statement duplicate,
+			final Statement original,
+			int length) {
+		if (this.duplicateCases == null) {
 			this.scope.problemReporter().duplicateCase(original);
 			if (duplicate != original)
 				this.scope.problemReporter().duplicateCase(duplicate);
-			this.duplicateCaseStatements = new CaseStatement[length];
-			this.duplicateCaseStatements[this.duplicateCaseStatementsCounter++] = original;
+			this.duplicateCases = new Statement[length];
+			this.duplicateCases[this.duplicateCaseCounter++] = original;
 			if (duplicate != original)
-				this.duplicateCaseStatements[this.duplicateCaseStatementsCounter++] = duplicate;
+				this.duplicateCases[this.duplicateCaseCounter++] = duplicate;
 		} else {
 			boolean found = false;
-			searchReportedDuplicate: for (int k = 2; k < this.duplicateCaseStatementsCounter; k++) {
-				if (this.duplicateCaseStatements[k] == duplicate) {
+			searchReportedDuplicate: for (int k = 2; k < this.duplicateCaseCounter; k++) {
+				if (this.duplicateCases[k] == duplicate) {
 					found = true;
 					break searchReportedDuplicate;
 				}
 			}
 			if (!found) {
 				this.scope.problemReporter().duplicateCase(duplicate);
-				this.duplicateCaseStatements[this.duplicateCaseStatementsCounter++] = duplicate;
+				this.duplicateCases[this.duplicateCaseCounter++] = duplicate;
 			}
 		}
 	}
@@ -908,10 +1682,10 @@ public class SwitchStatement extends Expression {
 	public boolean canCompleteNormally() {
 		if (this.statements == null || this.statements.length == 0)
 			return true;
-		if (!this.switchLabeledRules) { // switch labeled statement group
+		if ((this.switchBits & LabeledRules) == 0) { // switch labeled statement group
 			if (this.statements[this.statements.length - 1].canCompleteNormally())
 				return true; // last statement as well as last switch label after blocks if exists.
-			if (this.defaultCase == null)
+			if (this.totalPattern == null && this.defaultCase == null)
 				return true;
 			for (int i = 0, length = this.statements.length; i < length; i++) {
 				if (this.statements[i].breaksOut(null))
@@ -922,7 +1696,7 @@ public class SwitchStatement extends Expression {
 			for (Statement stmt : this.statements) {
 				if (stmt instanceof CaseStatement)
 					continue; // skip case
-				if (this.defaultCase == null)
+				if (this.totalPattern == null && this.defaultCase == null)
 					return true;
 				if (stmt instanceof Expression)
 					return true;
@@ -954,7 +1728,7 @@ public class SwitchStatement extends Expression {
 	}
 
 	@Override
-	public StringBuffer printExpression(int indent, StringBuffer output) {
+	public StringBuilder printExpression(int indent, StringBuilder output) {
 		return printStatement(indent, output);
 	}
 }

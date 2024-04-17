@@ -6,7 +6,7 @@
 
     <groupId>com.github.cedric05</groupId>
     <artifactId>java-no-body-compiler</artifactId>
-    <version>1.0</version>
+    <version>1.1</version>
 
     <properties>
         <maven.compiler.target>21</maven.compiler.target>
